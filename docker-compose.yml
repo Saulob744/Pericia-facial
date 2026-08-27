@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  db_vetorial:
+    image: ankane/pgvector:v0.5.1
+    container_name: idhunter_postgres
+    environment:
+      POSTGRES_USER: perito
+      POSTGRES_PASSWORD: senha_segura_123
+      POSTGRES_DB: idhunter_db
+    ports:
+      - "5454:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

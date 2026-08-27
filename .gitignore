@@ -1,0 +1,49 @@
+__pycache__/
+*.pt
+*.caffemodel
+*.prototxt
+dataset_teste/
+dados_brutos/
+resultados_id_hunter/
+# Ambientes virtuais
+venv/
+env/
+.env
+
+# Datasets e mídias pesadas
+datasets/
+imagens/
+*.mp4
+*.avi
+
+# Modelos de IA
+*.pt
+*.h5
+*.weights
+@"
+# Ambientes virtuais
+clean/
+venv/
+env/
+
+# Datasets, imagens e videos
+*.mp4
+*.avi
+*.jpg
+*.jpeg
+*.png
+datasets/
+data/
+
+# Modelos treinados (Pesos)
+*.pt
+*.pth
+*.h5
+*.onnx
+*.weights
+*.dat
+
+# Caches
+__pycache__/
+.ipynb_checkpoints/
+"@ | Out-File -Encoding UTF8 .gitignore
