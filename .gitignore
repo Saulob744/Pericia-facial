@@ -20,30 +20,10 @@ imagens/
 *.pt
 *.h5
 *.weights
-@"
-# Ambientes virtuais
 clean/
-venv/
-env/
-
-# Datasets, imagens e videos
-*.mp4
-*.avi
-*.jpg
-*.jpeg
-*.png
-datasets/
-data/
-
-# Modelos treinados (Pesos)
+entradas_celular/
+armazenamento_crops/
 *.pt
 *.pth
 *.h5
-*.onnx
-*.weights
-*.dat
-
-# Caches
 __pycache__/
-.ipynb_checkpoints/
-"@ | Out-File -Encoding UTF8 .gitignore
