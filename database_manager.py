@@ -2,7 +2,9 @@ import psycopg2
 import numpy as np
 from pgvector.psycopg2 import register_vector
 
-# Configurações do Banco (As mesmas do docker-compose.yml)
+# ==========================================
+# CONFIGURAÇÕES DO BANCO
+# ==========================================
 DB_CONFIG = {
     "dbname": "idhunter_db",
     "user": "perito",
@@ -12,43 +14,56 @@ DB_CONFIG = {
 }
 
 def conectar_banco():
-    """Cria a conexão com o PostgreSQL e ensina ele a ler vetores."""
     conn = psycopg2.connect(**DB_CONFIG)
-    register_vector(conn) # Ensina o psycopg2 a lidar com o pgvector
+    register_vector(conn)
     return conn
 
-def inserir_face(hash_foto, caminho_original, caminho_crop, vetor_512d):
-    """Salva a face recortada e a matemática dela no banco."""
+def inicializar_banco():
     conn = conectar_banco()
     cursor = conn.cursor()
     
-    try:
-        sql = """
-            INSERT INTO ppl_faces (hash_sha256, caminho_origem_nas, path_minio_crop, embedding)
-            VALUES (%s, %s, %s, %s)
-            RETURNING id;
-        """
-        cursor.execute(sql, (hash_foto, caminho_original, caminho_crop, vetor_512d))
-        novo_id = cursor.fetchone()[0]
-        conn.commit()
-        print(f"[OK] Rosto salvo com sucesso! ID no Banco: {novo_id}")
-        return novo_id
-    except psycopg2.IntegrityError:
-        print("[AVISO] Este Hash SHA-256 já existe no banco. Inserção bloqueada.")
-        conn.rollback()
-    finally:
-        cursor.close()
-        conn.close()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS individuos (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            embedding VECTOR(512),
+            data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ocorrencias (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            individuo_id UUID REFERENCES individuos(id),
+            id_extracao VARCHAR(50), 
+            hash_sha256 VARCHAR(64) UNIQUE,
+            caminho_arquivo TEXT,
+            caminho_crop TEXT,
+            data_ocorrencia TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
 
-def buscar_similar(vetor_novo, limite_distancia=0.5):
-    """Busca no banco rostos parecidos usando a mágica do HNSW."""
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS fila_processamento (
+            id SERIAL PRIMARY KEY,
+            id_extracao VARCHAR(50),
+            caminho_arquivo TEXT UNIQUE,
+            status VARCHAR(20) DEFAULT 'PENDENTE',
+            data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+    print("[BANCO] Tabelas 'individuos', 'ocorrencias' e 'fila_processamento' estruturadas.")
+
+def buscar_similar(vetor_novo, limite_distancia=0.45):
     conn = conectar_banco()
     cursor = conn.cursor()
     
-    # O operador <=> faz a busca por similaridade de cosseno (a melhor para rostos)
     sql = """
-        SELECT id, caminho_origem_nas, (embedding <=> %s) AS distancia 
-        FROM ppl_faces 
+        SELECT id, (embedding <=> %s) AS distancia 
+        FROM individuos 
         WHERE (embedding <=> %s) < %s
         ORDER BY distancia ASC
         LIMIT 1;
@@ -61,32 +76,128 @@ def buscar_similar(vetor_novo, limite_distancia=0.5):
     
     return resultado
 
-# ==========================================
-# ÁREA DE TESTE
-# ==========================================
+def registrar_face(vetor_512d, hash_foto, id_extracao, caminho_original, caminho_crop):
+    conn = conectar_banco()
+    cursor = conn.cursor()
+    historico_lotes = []
+    
+    try:
+        match = buscar_similar(vetor_512d)
+        
+        if match:
+            individuo_id = match[0]
+            status = "REINCIDENTE"
+            
+            cursor.execute("""
+                SELECT DISTINCT id_extracao 
+                FROM ocorrencias 
+                WHERE individuo_id = %s;
+            """, (individuo_id,))
+            
+            historico_lotes = [linha[0] for linha in cursor.fetchall()]
+            
+        else:
+            sql_novo = "INSERT INTO individuos (embedding) VALUES (%s) RETURNING id;"
+            cursor.execute(sql_novo, (vetor_512d,))
+            individuo_id = cursor.fetchone()[0]
+            status = "NOVO"
+            
+        sql_ocorrencia = """
+            INSERT INTO ocorrencias (individuo_id, id_extracao, hash_sha256, caminho_arquivo, caminho_crop)
+            VALUES (%s, %s, %s, %s, %s);
+        """
+        cursor.execute(sql_ocorrencia, (individuo_id, id_extracao, hash_foto, caminho_original, caminho_crop))
+        
+        conn.commit()
+        
+        return status, individuo_id, historico_lotes
+        
+    except psycopg2.IntegrityError:
+        conn.rollback()
+        return "DUPLICADO", None, []
+    finally:
+        cursor.close()
+        conn.close()
+
+def enfileirar_tarefa(id_extracao, caminho_arquivo):
+    conn = conectar_banco()
+    cursor = conn.cursor()
+    try:
+        sql = """
+            INSERT INTO fila_processamento (id_extracao, caminho_arquivo, status)
+            VALUES (%s, %s, 'PENDENTE')
+            ON CONFLICT (caminho_arquivo) DO NOTHING;
+        """
+        cursor.execute(sql, (id_extracao, caminho_arquivo))
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
+
 if __name__ == "__main__":
-    print("Iniciando teste de conexão com o banco corporativo...")
+    inicializar_banco()
+
+def pegar_tarefa_pendente():
+    conn = conectar_banco()
+    cursor = conn.cursor()
+    try:
+        sql = """
+            UPDATE fila_processamento
+            SET status = 'PROCESSANDO'
+            WHERE id = (
+                SELECT id FROM fila_processamento 
+                WHERE status = 'PENDENTE' 
+                ORDER BY id ASC
+                LIMIT 1 
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING id, id_extracao, caminho_arquivo;
+        """
+        cursor.execute(sql)
+        tarefa = cursor.fetchone()
+        conn.commit()
+        return tarefa
+    except Exception as e:
+        conn.rollback()
+        print(f"[ERRO BANCO] Falha ao puxar tarefa: {e}")
+        return None
+    finally:
+        cursor.close()
+        conn.close()
+
+def atualizar_status_tarefa(tarefa_id, novo_status):
+    conn = conectar_banco()
+    cursor = conn.cursor()
+    try:
+        sql = "UPDATE fila_processamento SET status = %s WHERE id = %s;"
+        cursor.execute(sql, (novo_status, tarefa_id))
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
+def obter_estatisticas_sistema():
+    conn = conectar_banco()
+    cursor = conn.cursor()
     
-    # 1. Simular a Extração de uma Face (Geramos 512 números aleatórios)
-    meu_vetor_teste = np.random.rand(512).astype(np.float32)
-    hash_falso = "abc123hashfalso_teste_001"
+    estatisticas = {
+        "fila": {"PENDENTE": 0, "PROCESSANDO": 0, "CONCLUIDO": 0, "FALHA": 0, "SEM_ROSTO": 0},
+        "biometria": {"total_individuos": 0, "total_ocorrencias": 0}
+    }
     
-    print("\n--- TESTE 1: INSERÇÃO ---")
-    inserir_face(
-        hash_foto=hash_falso,
-        caminho_original="Celular_Suspeito/foto_praia.jpg",
-        caminho_crop="minio_bucket/rosto_01.jpg",
-        vetor_512d=meu_vetor_teste
-    )
-    
-    print("\n--- TESTE 2: BUSCA (O Rosto acabou de chegar de novo) ---")
-    # Vamos buscar o próprio vetor para ver se o banco acha ele mesmo
-    match = buscar_similar(meu_vetor_teste)
-    
-    if match:
-        print(f"🚨 ALERTA: Sujeito encontrado!")
-        print(f"ID: {match[0]}")
-        print(f"Pasta Original: {match[1]}")
-        print(f"Distância (0 é idêntico): {match[2]:.4f}")
-    else:
-        print("Nenhum suspeito encontrado no banco.")
+    try:
+        cursor.execute("SELECT status, COUNT(*) FROM fila_processamento GROUP BY status;")
+        for status, quantidade in cursor.fetchall():
+            estatisticas["fila"][status] = quantidade
+            
+        cursor.execute("SELECT COUNT(*) FROM individuos;")
+        estatisticas["biometria"]["total_individuos"] = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM ocorrencias;")
+        estatisticas["biometria"]["total_ocorrencias"] = cursor.fetchone()[0]
+        
+        return estatisticas
+    finally:
+        cursor.close()
+        conn.close()

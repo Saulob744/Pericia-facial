@@ -70,47 +70,62 @@ class Deduplicador:
 class RoteadorSemantico:
     """Classifica a imagem usando o YOLO customizado para separar Lixo, Limpos e Oclusões."""
     def __init__(self, model_path='best.pt'):
-        
         try:
             self.model = YOLO(model_path)
             print(f"[INFO] Modelo {model_path} carregado com sucesso.")
+            # Isso vai te mostrar QUAIS classes seu modelo realmente conhece!
+            print(f"[INFO] Classes conhecidas pelo seu YOLO: {self.model.names}")
         except Exception as e:
             print(f"[AVISO] Não foi possível carregar o modelo YOLO: {e}")
             self.model = None
 
     def classificar(self, filepath):
         if self.model is None:
-            return "limpos"
+            return "limpos" # Fallback de segurança: se a IA falhar, não jogue fora, passe para frente.
 
         resultados = self.model(filepath, verbose=False)
         result = resultados[0]
         
-        nome_classe_predita = ""
-        confianca = 0.0
-
-        # Verifica se o modelo é de Classificação (probs) ou Detecção (boxes)
-        if result.probs is not None:
-            # Lógica para modelo de Classificação
-            confianca = result.probs.top1conf.item()
-            nome_classe_predita = result.names[result.probs.top1].lower()
-        elif result.boxes is not None and len(result.boxes) > 0:
-            # Lógica para modelo de Detecção de Objetos (Pega a detecção com maior certeza)
-            melhor_box = max(result.boxes, key=lambda b: b.conf.item())
-            confianca = melhor_box.conf.item()
-            nome_classe_predita = result.names[int(melhor_box.cls.item())].lower()
-        else:
-            # Não encontrou nada na imagem (Ex: parede vazia, emoji sem padrão humano)
-            return "lixo"
-
-        # Se o modelo encontrou algo, mas a certeza é menor que 40%, assumimos que é "Lixo" (Falso Positivo)
-        if confianca < 0.40:
-            return "lixo"
+        # Variáveis para rastrear o que foi encontrado na imagem
+        encontrou_limpo = False
+        encontrou_oclusao = False
         
-        # Roteamento baseado nas SUAS classes exatas
-        if "mascara" in nome_classe_predita or "barba" in nome_classe_predita:
-            return "oclusao"
-        elif "face_limpa" in nome_classe_predita:
+        # 1. Se for um modelo de Detecção de Objetos (Boxes) - O MAIS COMUM PARA ROSTOS
+        if result.boxes is not None and len(result.boxes) > 0:
+            for box in result.boxes:
+                confianca = box.conf.item()
+                # Flexibilizamos a confiança para 25% para evitar perder rostos
+                if confianca < 0.25: 
+                    continue 
+                
+                nome_classe = result.names[int(box.cls.item())].lower()
+                
+                # [DEBUG VISUAL PARA VOCÊ ENTENDER O QUE A IA ESTÁ LENDO]
+                print(f"   └─ IA viu: '{nome_classe}' com {confianca*100:.1f}% de certeza")
+
+                # Regras de roteamento flexíveis (adicionamos sinônimos)
+                if any(palavra in nome_classe for palavra in ["mascara", "barba", "oclu", "sunglasses"]):
+                    encontrou_oclusao = True
+                elif any(palavra in nome_classe for palavra in ["face", "rosto", "limp", "person", "head"]):
+                    encontrou_limpo = True
+
+        # 2. Se for um modelo de Classificação de Imagem inteira (Probs)
+        elif result.probs is not None:
+            confianca = result.probs.top1conf.item()
+            if confianca >= 0.25:
+                nome_classe = result.names[result.probs.top1].lower()
+                print(f"   └─ IA classificou foto inteira como: '{nome_classe}' ({confianca*100:.1f}%)")
+                
+                if any(p in nome_classe for p in ["mascara", "barba", "oclu"]):
+                    encontrou_oclusao = True
+                elif any(p in nome_classe for p in ["face", "rosto", "limp", "person"]):
+                    encontrou_limpo = True
+
+        # 3. DECISÃO FINAL (A Ordem de Prioridade importa)
+        if encontrou_limpo:
             return "limpos"
+        elif encontrou_oclusao:
+            return "oclusao"
         else:
             return "lixo"
 
