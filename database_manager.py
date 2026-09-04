@@ -57,7 +57,17 @@ def inicializar_banco():
     conn.close()
     print("[BANCO] Tabelas 'individuos', 'ocorrencias' e 'fila_processamento' estruturadas.")
 
-def buscar_similar(vetor_novo, limite_distancia=0.45):
+def resetar_banco_dados():
+    conn = conectar_banco()
+    cursor = conn.cursor()
+    cursor.execute("TRUNCATE fila_processamento, ocorrencias, individuos RESTART IDENTITY CASCADE;")
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return True
+
+def buscar_similar(vetor_novo, limite_distancia=0.38):
+
     conn = conectar_banco()
     cursor = conn.cursor()
     
@@ -75,6 +85,51 @@ def buscar_similar(vetor_novo, limite_distancia=0.45):
     conn.close()
     
     return resultado
+
+def buscar_historico_completo_por_vetor(vetor_novo, limite_distancia=0.38):
+
+    conn = conectar_banco()
+    cursor = conn.cursor()
+    
+    sql_ind = """
+        SELECT id, (embedding <=> %s) AS distancia 
+        FROM individuos 
+        WHERE (embedding <=> %s) < %s
+        ORDER BY distancia ASC;
+    """
+    cursor.execute(sql_ind, (vetor_novo, vetor_novo, limite_distancia))
+    individuos_encontrados = cursor.fetchall()
+    
+    resultados = []
+    
+    for ind_id, dist in individuos_encontrados:
+        sql_ocorrencias = """
+            SELECT id_extracao, caminho_arquivo, caminho_crop, data_ocorrencia
+            FROM ocorrencias
+            WHERE individuo_id = %s
+            ORDER BY data_ocorrencia DESC;
+        """
+        cursor.execute(sql_ocorrencias, (ind_id,))
+        ocorrencias = cursor.fetchall()
+        
+        resultados.append({
+            "individuo_id": ind_id,
+            "distancia": dist,
+            "ocorrencias": [
+                {
+                    "lote": oc[0],
+                    "caminho_arquivo": oc[1],
+                    "caminho_crop": oc[2],
+                    "data_ocorrencia": oc[3]
+                }
+                for oc in ocorrencias
+            ]
+        })
+        
+    cursor.close()
+    conn.close()
+    return resultados
+
 
 def registrar_face(vetor_512d, hash_foto, id_extracao, caminho_original, caminho_crop):
     conn = conectar_banco()

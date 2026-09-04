@@ -52,7 +52,24 @@ pip install -r requirements.txt
 
 ### COMO EXECUTAR
 
-```bash
-streamlit run app_master.py
+1. **Central de Comando (CLI)**:
+   ```bash
+   python id_hunter.py
+   ```
+
+2. **Painel Web (Streamlit)**:
+   ```bash
+   streamlit run painel_web.py
+   ```
 
 ---
+
+## 📁 Arquivos Essenciais da Aplicação
+
+- `id_hunter.py` - Central de Comando interativa (CLI).
+- `painel_web.py` - Painel Gráfico Web (Streamlit) de Auditoria e Busca por Referência.
+- `buscar_referencia.py` - Motor de busca pericial por foto de referência e rede de lotes.
+- `database_manager.py` - Gerenciador do Banco PostgreSQL + pgvector.
+- `maestro_scanner.py` - Varredor de pastas de entrada e enfileirador de tarefas.
+- `worker_operario.py` - Processador de IA e extrator biométrico ArcFace.
+

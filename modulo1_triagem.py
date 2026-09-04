@@ -9,8 +9,9 @@ from ultralytics import YOLO
 # ==========================================
 # CONFIGURAÇÕES E DIRETÓRIOS
 # ==========================================
-INPUT_DIR = "dados_brutos" # Pasta onde você vai jogar todas as fotos misturadas
+INPUT_DIR = r"C:\Users\saulo.borges\Downloads\facial_teste\entradas_celular"
 BASE_OUTPUT_DIR = "resultados_id_hunter"
+
 
 DIRS = {
     "limpos": os.path.join(BASE_OUTPUT_DIR, "01_rostos_limpos"),

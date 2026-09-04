@@ -3,24 +3,31 @@ import sys
 import time
 import subprocess
 
-PASTA_ORIGEM = ""
-PASTA_DESTINO = ""
+PASTA_ORIGEM = r"C:\Users\saulo.borges\Downloads\facial_teste\entradas_celular"
+PASTA_DESTINO = r"C:\Users\saulo.borges\Downloads\facial_teste\armazenamento_crops"
 
 def limpar_tela():
     os.system('cls' if os.name == 'nt' else 'clear')
 
 def obter_pastas():
     global PASTA_ORIGEM, PASTA_DESTINO
+    
+    padrao_origem = r"C:\Users\saulo.borges\Downloads\facial_teste\entradas_celular"
+    padrao_destino = r"C:\Users\saulo.borges\Downloads\facial_teste\armazenamento_crops"
+    
     if not PASTA_ORIGEM:
-        print("\n📂 [ENTRADA] Onde estão as fotos brutas dos celulares?")
-        PASTA_ORIGEM = input("Caminho Origem (Ex: C:\\...\\entradas_celular): ").strip()
+        print(f"\n📂 [ENTRADA] Pressione ENTER para usar a pasta padrão:\n    '{padrao_origem}'")
+        resp = input("Ou digite um novo caminho de Origem: ").strip()
+        PASTA_ORIGEM = resp if resp else padrao_origem
     
     if not PASTA_DESTINO:
-        print("\n💾 [SAÍDA] Onde devemos salvar os rostos recortados (Crops)?")
-        PASTA_DESTINO = input("Caminho Destino (Ex: C:\\...\\armazenamento_crops): ").strip()
-        os.makedirs(PASTA_DESTINO, exist_ok=True)
+        print(f"\n💾 [SAÍDA] Pressione ENTER para usar a pasta padrão:\n    '{padrao_destino}'")
+        resp = input("Ou digite um novo caminho de Destino: ").strip()
+        PASTA_DESTINO = resp if resp else padrao_destino
         
+    os.makedirs(PASTA_DESTINO, exist_ok=True)
     return PASTA_ORIGEM, PASTA_DESTINO
+
 
 def executar_com_debug(script_e_argumentos):
     comando_completo = [sys.executable] + script_e_argumentos
@@ -53,6 +60,7 @@ def exibir_menu():
     print(" 1. 🔍 Escanear Celulares (Adicionar na Fila)")
     print(" 2. 👷 Iniciar Operário de IA (Processar Fila)")
     print(" 3. 📊 Abrir Painel de Monitoramento ao Vivo")
+    print(" 6. 🎯 Buscar Indivíduo por Foto de Referência (Mapear Rede de Lotes)")
     print(" 4. 🔄 Mudar Pastas (Origem/Destino)")
     print(" 5. 🧹 RESETAR SISTEMA (Limpar Banco de Dados)")
     print(" 0. 🚪 Sair do Sistema")
@@ -81,7 +89,22 @@ def main():
                 
         elif opcao == '3':
             limpar_tela()
-            executar_com_debug(['painel_monitor.py'])
+            print("🌐 Abrindo Painel Web no navegador (Streamlit)...")
+            executar_com_debug(['-m', 'streamlit', 'run', 'painel_web.py'])
+
+
+        elif opcao == '6':
+            limpar_tela()
+            path_padrao = r"C:\Users\saulo.borges\Downloads\facial_teste\referencia"
+            print("=" * 70)
+            print(" 🎯 BUSCA PERICIAL POR FOTO DE REFERÊNCIA ")
+            print("=" * 70)
+            print(f"Pressione ENTER para usar a pasta padrão: '{path_padrao}'")
+            entrada_ref = input("Ou digite o caminho da foto/pasta de referência: ").strip()
+            caminho_final = entrada_ref if entrada_ref else path_padrao
+            
+            executar_com_debug(['buscar_referencia.py', '--referencia', caminho_final])
+            input("\n[Pressione ENTER para voltar ao menu principal...]")
                 
         elif opcao == '4':
             PASTA_ORIGEM = input("\nDigite o novo caminho de ORIGEM: ").strip()
@@ -104,6 +127,7 @@ def main():
         else:
             print("\n❌ Opção inválida.")
             time.sleep(1)
+
 
 if __name__ == "__main__":
     main()
