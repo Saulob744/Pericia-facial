@@ -1,26 +1,8 @@
-# ==========================================
-# DEPENDÊNCIAS
-# ==========================================
-
-# 1. Core Visual e Processamento de Imagens
+streamlit>=1.30.0
 opencv-python>=4.8.0
-Pillow>=10.0.0
-imagehash>=4.3.1
-
-# 2. Modelos de Detecção Facial e Classificação
-ultralytics>=8.1.0        # YOLOv8
-mtcnn>=0.1.1              # Extrator MTCNN
-
-# 3. Modelos de Vetorização (Embeddings) e Inferência
-insightface>=0.7.3        # ArcFace para embeddings
-onnxruntime>=1.16.0       # Backend necessário para rodar o InsightFace rápido na CPU
-
-# 4. Machine Learning, Clusterização e Métricas
-scikit-learn>=1.3.0       # DBSCAN e métricas de clusterização
 numpy>=1.24.0
 pandas>=2.0.0
-
-# 5. Dashboard e Visualização
-streamlit>=1.30.0         # Para o painel de benchmarking
-
-psutil>=5.9.0              # Para monitoramento de recursos no dashboard
+insightface>=0.7.3
+onnxruntime>=1.16.0
+psycopg2-binary>=2.9.9
+pgvector>=0.2.4
