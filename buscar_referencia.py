@@ -16,7 +16,7 @@ def desenhar_barra_progresso(atual, total, tamanho=30):
     barra = "█" * blocos + "░" * (tamanho - blocos)
     print(f"\r⏳ [PROCESSANDO] [{barra}] {atual}/{total} ({porcentagem*100:.1f}%)", end="", flush=True)
 
-def processar_busca_referencia(caminho_referencia: str, limite_distancia: float = 0.38):
+def processar_busca_referencia(caminho_referencia: str, limite_distancia: float = 0.50):
     print("=" * 75)
     print(" 🎯 ID HUNTER - BUSCA PERICIAL POR FOTO DE REFERÊNCIA")
     print("=" * 75)
@@ -109,10 +109,15 @@ def processar_busca_referencia(caminho_referencia: str, limite_distancia: float 
         print(f"   ├─ 🧠 Encontrado(s) {len(faces_validas)} rosto(s) válido(s) na imagem.")
         
         for f_idx, face in enumerate(faces_validas, start=1):
-            vetor_512d = face.embedding.astype(np.float32)
+            if hasattr(face, 'normed_embedding') and face.normed_embedding is not None:
+                vetor_512d = face.normed_embedding.astype(np.float32)
+            else:
+                vetor_512d = face.embedding.astype(np.float32)
+                norma = np.linalg.norm(vetor_512d)
+                if norma > 0: vetor_512d = vetor_512d / norma
             
-            # Consulta com limite de 0.42 (pega 0.38 estrito e ate 0.42 como alerta)
-            resultados = buscar_historico_completo_por_vetor(vetor_512d, limite_distancia=0.42)
+            # Consulta com limite configurado
+            resultados = buscar_historico_completo_por_vetor(vetor_512d, limite_distancia=limite_distancia)
             
             print(f"\n   👤 [Rosto {f_idx}/{len(faces_validas)}]")
             

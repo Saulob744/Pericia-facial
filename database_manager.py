@@ -66,19 +66,23 @@ def resetar_banco_dados():
     conn.close()
     return True
 
-def buscar_similar(vetor_novo, limite_distancia=0.38):
-
+def buscar_similar(vetor_novo, limite_distancia=0.50):
     conn = conectar_banco()
     cursor = conn.cursor()
     
+    vetor_arr = np.array(vetor_novo, dtype=np.float32)
+    norma = np.linalg.norm(vetor_arr)
+    if norma > 0:
+        vetor_arr = vetor_arr / norma
+    
     sql = """
-        SELECT id, (embedding <=> %s) AS distancia 
+        SELECT id, (embedding <=> %s::vector) AS distancia 
         FROM individuos 
-        WHERE (embedding <=> %s) < %s
+        WHERE (embedding <=> %s::vector) < %s
         ORDER BY distancia ASC
         LIMIT 1;
     """
-    cursor.execute(sql, (vetor_novo, vetor_novo, limite_distancia))
+    cursor.execute(sql, (vetor_arr, vetor_arr, limite_distancia))
     resultado = cursor.fetchone()
     
     cursor.close()
@@ -86,18 +90,22 @@ def buscar_similar(vetor_novo, limite_distancia=0.38):
     
     return resultado
 
-def buscar_historico_completo_por_vetor(vetor_novo, limite_distancia=0.38):
-
+def buscar_historico_completo_por_vetor(vetor_novo, limite_distancia=0.50):
     conn = conectar_banco()
     cursor = conn.cursor()
     
+    vetor_arr = np.array(vetor_novo, dtype=np.float32)
+    norma = np.linalg.norm(vetor_arr)
+    if norma > 0:
+        vetor_arr = vetor_arr / norma
+    
     sql_ind = """
-        SELECT id, (embedding <=> %s) AS distancia 
+        SELECT id, (embedding <=> %s::vector) AS distancia 
         FROM individuos 
-        WHERE (embedding <=> %s) < %s
+        WHERE (embedding <=> %s::vector) < %s
         ORDER BY distancia ASC;
     """
-    cursor.execute(sql_ind, (vetor_novo, vetor_novo, limite_distancia))
+    cursor.execute(sql_ind, (vetor_arr, vetor_arr, limite_distancia))
     individuos_encontrados = cursor.fetchall()
     
     resultados = []
@@ -131,17 +139,39 @@ def buscar_historico_completo_por_vetor(vetor_novo, limite_distancia=0.38):
     return resultados
 
 
-def registrar_face(vetor_512d, hash_foto, id_extracao, caminho_original, caminho_crop):
+def registrar_face(vetor_512d, hash_foto, id_extracao, caminho_original, caminho_crop, limite_distancia=0.50):
     conn = conectar_banco()
     cursor = conn.cursor()
     historico_lotes = []
     
+    vetor_arr = np.array(vetor_512d, dtype=np.float32)
+    norma = np.linalg.norm(vetor_arr)
+    if norma > 0:
+        vetor_arr = vetor_arr / norma
+    
     try:
-        match = buscar_similar(vetor_512d)
+        match = buscar_similar(vetor_arr, limite_distancia=limite_distancia)
         
         if match:
             individuo_id = match[0]
             status = "REINCIDENTE"
+            
+            # Atualização suave do centróide (80% histórico + 20% nova observação)
+            try:
+                cursor.execute("SELECT embedding FROM individuos WHERE id = %s;", (individuo_id,))
+                row_emb = cursor.fetchone()
+                if row_emb and row_emb[0] is not None:
+                    if hasattr(row_emb[0], 'to_numpy'):
+                        v_old = row_emb[0].to_numpy().astype(np.float32)
+                    else:
+                        v_old = np.array(row_emb[0], dtype=np.float32)
+                    v_blend = 0.80 * v_old + 0.20 * vetor_arr
+                    norm_blend = np.linalg.norm(v_blend)
+                    if norm_blend > 0:
+                        v_blend = v_blend / norm_blend
+                    cursor.execute("UPDATE individuos SET embedding = %s WHERE id = %s;", (v_blend, individuo_id))
+            except Exception as e_blend:
+                print(f"[AVISO] Falha ao atualizar centroide do individuo: {e_blend}")
             
             cursor.execute("""
                 SELECT DISTINCT id_extracao 
@@ -153,7 +183,7 @@ def registrar_face(vetor_512d, hash_foto, id_extracao, caminho_original, caminho
             
         else:
             sql_novo = "INSERT INTO individuos (embedding) VALUES (%s) RETURNING id;"
-            cursor.execute(sql_novo, (vetor_512d,))
+            cursor.execute(sql_novo, (vetor_arr,))
             individuo_id = cursor.fetchone()[0]
             status = "NOVO"
             

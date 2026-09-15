@@ -7,6 +7,9 @@ import time
 import hashlib
 import warnings
 import shutil
+import importlib
+import database_manager
+importlib.reload(database_manager)
 from database_manager import (
     enfileirar_tarefa, pegar_tarefa_pendente, atualizar_status_tarefa,
     registrar_face, obter_estatisticas_sistema, buscar_historico_completo_por_vetor,
@@ -49,11 +52,38 @@ def carregar_modelo_arcface():
     try:
         from insightface.app import FaceAnalysis
         app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
-        app.prepare(ctx_id=0, det_size=(640, 640), det_thresh=0.20)
+        # det_size=(640, 640) padrao com det_thresh=0.25 na entrada para capturar todos os rostos candidatos
+        app.prepare(ctx_id=0, det_size=(640, 640), det_thresh=0.25)
         return app
     except Exception as e:
         st.error(f"Erro: {e}")
         return None
+
+def validar_geometria_face(f, img_shape, conf_min=0.30, tam_min=25):
+    """Filtra deteccoes espurias que nao sao rostos sem descartar rostos reais."""
+    score = getattr(f, 'det_score', None)
+    if score is not None and score < conf_min:
+        return False, "baixa_confianca"
+    
+    bx = f.bbox.astype(int)
+    x1, y1, x2, y2 = max(0, bx[0]), max(0, bx[1]), min(img_shape[1], bx[2]), min(img_shape[0], bx[3])
+    alt_rosto, larg_rosto = y2 - y1, x2 - x1
+    
+    if alt_rosto < tam_min or larg_rosto < tam_min:
+        return False, "dimensao_insuficiente"
+    
+    proporcao = larg_rosto / float(alt_rosto) if alt_rosto > 0 else 0
+    # Faixa tolerante para rostos em diferentes angulos, inclinacoes e poses
+    if proporcao < 0.40 or proporcao > 2.20:
+        return False, "proporcao_invalida"
+    
+    # Validacao de marcos fiduciais (olhos) se disponiveis
+    if hasattr(f, 'kps') and f.kps is not None and len(f.kps) >= 2:
+        dist_olhos = np.linalg.norm(f.kps[0] - f.kps[1])
+        if dist_olhos < 6.0:
+            return False, "distancia_olhos_invalida"
+            
+    return True, "valido"
 
 def calcular_sha256(caminho_arquivo: str) -> str:
     hasher = hashlib.sha256()
@@ -68,12 +98,41 @@ def calcular_sha256(caminho_arquivo: str) -> str:
 def carregar_painel():
     st.markdown('<div class="pericia-header"><h1 class="pericia-title">ID-Hunter | Central Unificada</h1><p class="pericia-subtitle">Sistema de varredura automatizada, extração biométrica e busca.</p></div>', unsafe_allow_html=True)
 
+    # ==========================================
+    # BARRA LATERAL: CALIBRAÇÃO FORENSE
+    # ==========================================
+    st.sidebar.markdown("### ⚙️ Calibração Forense")
+    confianca_minima = st.sidebar.slider(
+        "Confiança Mínima (Filtro IA)",
+        min_value=0.15, max_value=0.80, value=0.30, step=0.05,
+        help="Confiança mínima para aceitar um rosto. Padrão calibrado: 0.30"
+    )
+    tolerancia_match = st.sidebar.slider(
+        "Tolerância de Match (Distância Máx)",
+        min_value=0.35, max_value=0.65, value=0.50, step=0.01,
+        help="Distância máxima para agrupar como a mesma pessoa (0.50 = similaridade >= 50%). Padrão calibrado: 0.50"
+    )
+    tamanho_min_face = st.sidebar.slider(
+        "Tamanho Mínimo da Face (px)",
+        min_value=15, max_value=100, value=25, step=5,
+        help="Descarta recortes minúsculos. Padrão calibrado: 25px"
+    )
+    st.sidebar.markdown(f"**Similaridade Mínima de Match:** `{(1.0 - tolerancia_match)*100:.1f}%`")
+    st.sidebar.markdown("---")
+
     aba1, aba2, aba3 = st.tabs(["🔬 Processamento e Fila", "📂 Auditoria e Reincidência", "🔎 Busca Biométrica"])
     
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     caminho_padrao_origem = os.path.join(BASE_DIR, "entradas_celular")
+    if not os.path.exists(caminho_padrao_origem) and os.path.exists(r"C:\Users\saulo.borges\Downloads\archive\Human Faces Dataset"):
+        caminho_padrao_origem = r"C:\Users\saulo.borges\Downloads\archive\Human Faces Dataset"
+
     caminho_padrao_destino = os.path.join(BASE_DIR, "armazenamento_crops")
+    
     caminho_padrao_ref = os.path.join(BASE_DIR, "referencia")
+    if not os.path.exists(caminho_padrao_ref) and os.path.exists(r"C:\Users\saulo.borges\Downloads\archive\referencia"):
+        caminho_padrao_ref = r"C:\Users\saulo.borges\Downloads\archive\referencia"
+
     caminho_padrao_ignoradas = os.path.join(BASE_DIR, "armazenamento_ignoradas")
 
     os.makedirs(caminho_padrao_destino, exist_ok=True)
@@ -190,23 +249,34 @@ def carregar_painel():
                 else:
                     rosto_salvo = False
                     for idx, f in enumerate(faces, 1):
+                        valido, motivo = validar_geometria_face(f, img.shape, confianca_minima, tamanho_min_face)
+                        if not valido:
+                            continue
+
                         bx = f.bbox.astype(int)
                         x1, y1, x2, y2 = max(0, bx[0]), max(0, bx[1]), min(img.shape[1], bx[2]), min(img.shape[0], bx[3])
                         alt_rosto, larg_rosto = y2 - y1, x2 - x1
-                        
-                        if alt_rosto < 20 or larg_rosto < 20: continue
 
                         rosto_salvo = True
-                        margem_y, margem_x = int(alt_rosto * 0.25), int(larg_rosto * 0.25)
+                        margem_y, margem_x = int(alt_rosto * 0.20), int(larg_rosto * 0.20)
                         x1_n, y1_n = max(0, x1 - margem_x), max(0, y1 - margem_y)
                         x2_n, y2_n = min(img.shape[1], x2 + margem_x), min(img.shape[0], y2 + margem_y)
 
                         crop = img[y1_n:y2_n, x1_n:x2_n]
-                        vec = f.embedding.astype(np.float32)
+                        
+                        # Extrai embedding com normalizacao unitaria L2
+                        if hasattr(f, 'normed_embedding') and f.normed_embedding is not None:
+                            vec = f.normed_embedding.astype(np.float32)
+                        else:
+                            vec = f.embedding.astype(np.float32)
+                            norma = np.linalg.norm(vec)
+                            if norma > 0:
+                                vec = vec / norma
+
                         h_face = hashlib.sha256(f"{h_base}_f{idx}".encode()).hexdigest()
                         c_crop = f"crop_{ext_id}_{idx}.jpg"
                         
-                        stt, ind_id, _ = registrar_face(vec, h_face, ext_id, cam_rel, c_crop)
+                        stt, ind_id, _ = registrar_face(vec, h_face, ext_id, cam_rel, c_crop, limite_distancia=tolerancia_match)
                         
                         p_susp = os.path.join(pasta_destino, str(ind_id))
                         os.makedirs(p_susp, exist_ok=True)
@@ -313,23 +383,44 @@ def carregar_painel():
                 app = carregar_modelo_arcface()
                 if not app: sb.update(label="Erro", state="error")
                 else:
-                    fs = [f for f in app.get(img_bgr) if f.bbox[3]-f.bbox[1] >= 30 and f.bbox[2]-f.bbox[0] >= 30]
+                    raw_faces = app.get(img_bgr)
+                    fs = [f for f in raw_faces if validar_geometria_face(f, img_bgr.shape, conf_min=confianca_minima, tam_min=tamanho_min_face)[0]]
                     if not fs:
-                        sb.update(label="Sem face.", state="error")
+                        sb.update(label="Nenhum rosto válido detectado com os filtros atuais.", state="error")
                         pb.progress(100)
                     else:
                         pb.progress(75)
                         sb.update(label="Pesquisa concluída.", state="complete")
                         pb.progress(100)
                         for i, f in enumerate(fs, 1):
-                            res = buscar_historico_completo_por_vetor(f.embedding.astype(np.float32), 0.42)
-                            st.write(f"#### Perfil #{i}")
-                            if not res: st.info("Inédito.")
+                            if hasattr(f, 'normed_embedding') and f.normed_embedding is not None:
+                                vec_ref = f.normed_embedding.astype(np.float32)
+                            else:
+                                vec_ref = f.embedding.astype(np.float32)
+                                norma = np.linalg.norm(vec_ref)
+                                if norma > 0: vec_ref = vec_ref / norma
+                            
+                            res = buscar_historico_completo_por_vetor(vec_ref, limite_distancia=tolerancia_match)
+                            conf_pct = float(f.det_score) * 100.0 if hasattr(f, 'det_score') and f.det_score else 0.0
+                            st.write(f"#### Perfil #{i} (Confiança de Detecção: {conf_pct:.1f}%)")
+                            if not res:
+                                st.info("Inédito na base (nenhuma correspondência encontrada com a tolerância configurada).")
                             else:
                                 for r in res:
-                                    c_r1, c_r2 = st.columns([1, 2.2])
-                                    c_r1.markdown('<span class="badge-reincidente">MATCH</span>' if r["distancia"]<=0.38 else '<span class="badge-lote">PARCIAL</span>', unsafe_allow_html=True)
-                                    c_r1.markdown(f"**ID:** `{r['individuo_id']}`<br>**Prox:** `{r['distancia']:.4f}`", unsafe_allow_html=True)
+                                    c_r1, c_r2 = st.columns([1.2, 2.0])
+                                    dist = float(r["distancia"])
+                                    simil = max(0.0, (1.0 - dist) * 100.0)
+                                    
+                                    # Calibracao dos badges de correspondencia
+                                    if dist <= (tolerancia_match - 0.05):
+                                        bdg = '<span class="badge-reincidente">MATCH FORTE</span>'
+                                    elif dist <= tolerancia_match:
+                                        bdg = '<span class="badge-match">MATCH PROVÁVEL</span>'
+                                    else:
+                                        bdg = '<span class="badge-lote">PARCIAL</span>'
+                                        
+                                    c_r1.markdown(bdg, unsafe_allow_html=True)
+                                    c_r1.markdown(f"**ID:** `{r['individuo_id']}`<br>**Similaridade:** `{simil:.1f}%`<br>**Distância:** `{dist:.4f}`", unsafe_allow_html=True)
                                     df_o = pd.DataFrame(r["ocorrencias"])
                                     if not df_o.empty: c_r2.dataframe(df_o[['lote', 'caminho_arquivo', 'data_ocorrencia']])
 
