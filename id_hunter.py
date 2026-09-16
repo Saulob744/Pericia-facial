@@ -3,22 +3,29 @@ import os
 import cv2
 import numpy as np
 import pandas as pd
+from PIL import Image
+import warnings
 import time
 import hashlib
-import warnings
-import shutil
-import importlib
-import database_manager
-importlib.reload(database_manager)
+import gc
+
 from database_manager import (
-    enfileirar_tarefa, pegar_tarefa_pendente, atualizar_status_tarefa,
-    registrar_face, obter_estatisticas_sistema, buscar_historico_completo_por_vetor,
+    enfileirar_tarefa,
+    pegar_tarefa_pendente,
+    atualizar_status_tarefa,
+    registrar_face,
+    obter_estatisticas_sistema,
+    buscar_historico_completo_por_vetor,
     resetar_banco_dados
 )
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 
-st.set_page_config(layout="wide", page_title="ID-Hunter | Central Unificada", page_icon="🔬")
+st.set_page_config(
+    layout="wide",
+    page_title="Facial-Científica | Central Unificada",
+    page_icon="🔬"
+)
 
 st.markdown("""
     <style>
@@ -26,64 +33,92 @@ st.markdown("""
     .stApp { background-color: #0b0f19; color: #f8fafc; }
     p, span, label, div { color: #cbd5e1; }
     .stMarkdown p { color: #cbd5e1 !important; font-size: 0.95rem; }
-    .pericia-header { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); padding: 24px 32px; border-radius: 8px; border-left: 4px solid #3b82f6; margin-bottom: 24px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); }
-    .pericia-title { color: #f8fafc !important; font-size: 1.75rem; font-weight: 600; margin: 0 0 8px 0; letter-spacing: -0.025em; }
-    .pericia-subtitle { color: #94a3b8 !important; font-size: 0.95rem; margin: 0; }
-    .metric-card-clean, .metric-card-alert { background-color: #1e293b; padding: 16px; border-radius: 8px; text-align: center; box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1); border: 1px solid #334155; }
+    .pericia-header {
+        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+        padding: 24px 32px;
+        border-radius: 8px;
+        border-left: 4px solid #3b82f6;
+        margin-bottom: 24px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    }
+    .pericia-title {
+        color: #f8fafc !important;
+        font-size: 1.75rem;
+        font-weight: 600;
+        margin: 0 0 8px 0;
+        letter-spacing: -0.025em;
+    }
+    .pericia-subtitle {
+        color: #94a3b8 !important;
+        font-size: 0.95rem;
+        margin: 0;
+    }
+    .metric-card-clean, .metric-card-alert {
+        background-color: #1e293b;
+        padding: 16px;
+        border-radius: 8px;
+        text-align: center;
+        box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+        border: 1px solid #334155;
+    }
     .metric-card-clean { border-top: 3px solid #3b82f6; }
     .metric-card-alert { border-top: 3px solid #ef4444; }
-    .metric-val { font-size: 1.75rem; font-weight: 700; margin: 0; line-height: 1.2; }
-    .metric-lbl { font-size: 0.75rem; color: #94a3b8 !important; margin: 8px 0 0 0; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
-    .badge-lote, .badge-reincidente, .badge-match { font-weight: 600; padding: 4px 10px; border-radius: 9999px; font-size: 0.75rem; letter-spacing: 0.025em; }
+    .metric-val {
+        font-size: 1.75rem;
+        font-weight: 700;
+        margin: 0;
+        line-height: 1.2;
+    }
+    .metric-lbl {
+        font-size: 0.75rem;
+        color: #94a3b8 !important;
+        margin: 8px 0 0 0;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        font-weight: 600;
+    }
+    .badge-lote, .badge-reincidente, .badge-match {
+        font-weight: 600;
+        padding: 4px 10px;
+        border-radius: 9999px;
+        font-size: 0.75rem;
+        letter-spacing: 0.025em;
+    }
     .badge-lote { background-color: #3b82f6; color: #ffffff !important; }
     .badge-reincidente { background-color: #ef4444; color: #ffffff !important; }
     .badge-match { background-color: #10b981; color: #ffffff !important; }
-    .stImage img { border-radius: 8px; border: 1px solid #334155; object-fit: cover; max-height: 150px; transition: all 0.2s ease-in-out; }
-    .stImage img:hover { transform: scale(1.02); border-color: #3b82f6; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+    .stImage img {
+        border-radius: 8px;
+        border: 1px solid #334155;
+        object-fit: cover;
+        max-height: 150px;
+        transition: all 0.2s ease-in-out;
+    }
+    .stImage img:hover {
+        transform: scale(1.02);
+        border-color: #3b82f6;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
     </style>
 """, unsafe_allow_html=True)
 
-if "worker_rodando" not in st.session_state: st.session_state["worker_rodando"] = False
-if "parar_solicitado" not in st.session_state: st.session_state["parar_solicitado"] = False
-if "ultimos_crops" not in st.session_state: st.session_state["ultimos_crops"] = []
+if "worker_rodando" not in st.session_state:
+    st.session_state["worker_rodando"] = False
+if "parar_solicitado" not in st.session_state:
+    st.session_state["parar_solicitado"] = False
+if "ultimos_crops" not in st.session_state:
+    st.session_state["ultimos_crops"] = []
 
 @st.cache_resource
-def carregar_modelo_arcface():
+def carregar_modelo_arcface(confianca_atual):
     try:
         from insightface.app import FaceAnalysis
         app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
-        # det_size=(640, 640) padrao com det_thresh=0.25 na entrada para capturar todos os rostos candidatos
-        app.prepare(ctx_id=0, det_size=(640, 640), det_thresh=0.25)
+        app.prepare(ctx_id=0, det_size=(640, 640), det_thresh=confianca_atual)          
         return app
     except Exception as e:
-        st.error(f"Erro: {e}")
+        st.error(f"Erro ao inicializar o motor ArcFace: {e}")
         return None
-
-def validar_geometria_face(f, img_shape, conf_min=0.30, tam_min=25):
-    """Filtra deteccoes espurias que nao sao rostos sem descartar rostos reais."""
-    score = getattr(f, 'det_score', None)
-    if score is not None and score < conf_min:
-        return False, "baixa_confianca"
-    
-    bx = f.bbox.astype(int)
-    x1, y1, x2, y2 = max(0, bx[0]), max(0, bx[1]), min(img_shape[1], bx[2]), min(img_shape[0], bx[3])
-    alt_rosto, larg_rosto = y2 - y1, x2 - x1
-    
-    if alt_rosto < tam_min or larg_rosto < tam_min:
-        return False, "dimensao_insuficiente"
-    
-    proporcao = larg_rosto / float(alt_rosto) if alt_rosto > 0 else 0
-    # Faixa tolerante para rostos em diferentes angulos, inclinacoes e poses
-    if proporcao < 0.40 or proporcao > 2.20:
-        return False, "proporcao_invalida"
-    
-    # Validacao de marcos fiduciais (olhos) se disponiveis
-    if hasattr(f, 'kps') and f.kps is not None and len(f.kps) >= 2:
-        dist_olhos = np.linalg.norm(f.kps[0] - f.kps[1])
-        if dist_olhos < 6.0:
-            return False, "distancia_olhos_invalida"
-            
-    return True, "valido"
 
 def calcular_sha256(caminho_arquivo: str) -> str:
     hasher = hashlib.sha256()
@@ -92,126 +127,122 @@ def calcular_sha256(caminho_arquivo: str) -> str:
             while chunk := f.read(8192):
                 hasher.update(chunk)
         return hasher.hexdigest()
-    except:
+    except Exception:
         return None
 
 def carregar_painel():
-    st.markdown('<div class="pericia-header"><h1 class="pericia-title">ID-Hunter | Central Unificada</h1><p class="pericia-subtitle">Sistema de varredura automatizada, extração biométrica e busca.</p></div>', unsafe_allow_html=True)
+    st.markdown("""
+        <div class="pericia-header">
+            <h1 class="pericia-title">Facial-Científica | Painel Unificado de Auditoria</h1>
+            <p class="pericia-subtitle">Sistema de varredura automatizada, extração biométrica e busca pericial de reincidentes.</p>
+        </div>
+    """, unsafe_allow_html=True)
 
-    # ==========================================
-    # BARRA LATERAL: CALIBRAÇÃO FORENSE
-    # ==========================================
     st.sidebar.markdown("### ⚙️ Calibração Forense")
-    confianca_minima = st.sidebar.slider(
-        "Confiança Mínima (Filtro IA)",
-        min_value=0.15, max_value=0.80, value=0.30, step=0.05,
-        help="Confiança mínima para aceitar um rosto. Padrão calibrado: 0.30"
-    )
-    tolerancia_match = st.sidebar.slider(
-        "Tolerância de Match (Distância Máx)",
-        min_value=0.35, max_value=0.65, value=0.50, step=0.01,
-        help="Distância máxima para agrupar como a mesma pessoa (0.50 = similaridade >= 50%). Padrão calibrado: 0.50"
-    )
-    tamanho_min_face = st.sidebar.slider(
-        "Tamanho Mínimo da Face (px)",
-        min_value=15, max_value=100, value=25, step=5,
-        help="Descarta recortes minúsculos. Padrão calibrado: 25px"
-    )
-    st.sidebar.markdown(f"**Similaridade Mínima de Match:** `{(1.0 - tolerancia_match)*100:.1f}%`")
+    confianca_minima = st.sidebar.slider("Confiança Mínima (Filtro IA)", 0.15, 0.80, 0.35, 0.05)
+    tolerancia_match = st.sidebar.slider("Tolerância de Match", 0.35, 0.65, 0.45, 0.01)
+    tamanho_min_face = st.sidebar.slider("Tamanho Mínimo (px)", 15, 100, 30, 5)
     st.sidebar.markdown("---")
 
-    aba1, aba2, aba3 = st.tabs(["🔬 Processamento e Fila", "📂 Auditoria e Reincidência", "🔎 Busca Biométrica"])
-    
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    caminho_padrao_origem = os.path.join(BASE_DIR, "entradas_celular")
-    if not os.path.exists(caminho_padrao_origem) and os.path.exists(r"C:\Users\saulo.borges\Downloads\archive\Human Faces Dataset"):
-        caminho_padrao_origem = r"C:\Users\saulo.borges\Downloads\archive\Human Faces Dataset"
-
-    caminho_padrao_destino = os.path.join(BASE_DIR, "armazenamento_crops")
-    
-    caminho_padrao_ref = os.path.join(BASE_DIR, "referencia")
-    if not os.path.exists(caminho_padrao_ref) and os.path.exists(r"C:\Users\saulo.borges\Downloads\archive\referencia"):
-        caminho_padrao_ref = r"C:\Users\saulo.borges\Downloads\archive\referencia"
-
-    caminho_padrao_ignoradas = os.path.join(BASE_DIR, "armazenamento_ignoradas")
-
-    os.makedirs(caminho_padrao_destino, exist_ok=True)
-    os.makedirs(caminho_padrao_ignoradas, exist_ok=True)
+    aba1, aba2, aba3 = st.tabs([
+        "🔬 Processamento e Fila",
+        "📂 Auditoria e Reincidência",
+        "🔎 Busca Biométrica"
+    ])
 
     with aba1:
         st.subheader("Processamento de Evidências")
-        col_p1, col_p2, col_p3 = st.columns(3)
-        with col_p1: pasta_origem = st.text_input("Diretório Origem:", value=caminho_padrao_origem)
-        with col_p2: pasta_destino = st.text_input("Diretório Destino:", value=caminho_padrao_destino)
-        with col_p3: pasta_ignoradas = st.text_input("Caixa Preta (Ignoradas):", value=caminho_padrao_ignoradas)
+        st.caption("Controle de ingestão de arquivos e execução de extração facial.")
+
+        caminho_padrao_origem = r"C:\Users\saulo.borges\Downloads\facial_teste\entradas_celular"
+        caminho_padrao_destino = r"C:\Users\saulo.borges\Downloads\facial_teste\armazenamento_crops"
+        pasta_rejeitados = r"C:\Users\saulo.borges\Downloads\facial_teste\rejeitados"
+        os.makedirs(pasta_rejeitados, exist_ok=True)
+
+        col_p1, col_p2 = st.columns(2)
+        with col_p1:
+            pasta_origem = st.text_input("Diretório de Origem (Lotes):", value=caminho_padrao_origem, key="cfg_origem")
+        with col_p2:
+            pasta_destino = st.text_input("Diretório de Destino (Crops):", value=caminho_padrao_destino, key="cfg_destino")
+
+        st.write("")
 
         col_btn1, col_btn2, col_btn3 = st.columns([1.2, 1.2, 1.2])
+
         with col_btn1:
-            if st.button("📋 Alimentar Fila", use_container_width=True):
+            if st.button("📋 Alimentar Fila de Processamento", use_container_width=True):
                 if not os.path.exists(pasta_origem):
-                    st.error("Diretório não localizado.")
+                    st.error(f"Diretório '{pasta_origem}' não localizado.")
                 else:
-                    lotes = [d for d in os.listdir(pasta_origem) if os.path.isdir(os.path.join(pasta_origem, d))]
-                    if not lotes: st.warning("Nenhum lote localizado.")
-                    else:
-                        total = 0
-                        with st.spinner("Indexando..."):
-                            for lote in lotes:
-                                caminho_lote = os.path.join(pasta_origem, lote)
-                                for root, _, files in os.walk(caminho_lote):
-                                    for file in files:
-                                        if file.lower().endswith(('.png', '.jpg', '.jpeg')):
-                                            caminho_abs = os.path.join(root, file)
-                                            caminho_rel = os.path.relpath(caminho_abs, pasta_origem)
-                                            enfileirar_tarefa(lote, caminho_rel)
-                                            total += 1
-                        st.success(f"{total} inseridos na fila.")
+                    with st.spinner("Indexando arquivos via os.scandir() e inserindo em lote no PostgreSQL..."):
+                        from maestro_scanner import mapear_lotes_de_extracao
+                        total_enfileiradas = mapear_lotes_de_extracao(pasta_origem)
+                    st.success(f"Operação concluída. {total_enfileiradas} registros inseridos em lote na fila.")
 
         with col_btn2:
-            if st.button("▶️ Iniciar Motor de Extração", type="primary", use_container_width=True, disabled=st.session_state["worker_rodando"]):
+            btn_iniciar = st.button("▶️ Iniciar Motor de Extração", type="primary", use_container_width=True, disabled=st.session_state["worker_rodando"])
+            if btn_iniciar:
                 st.session_state["worker_rodando"] = True
                 st.session_state["parar_solicitado"] = False
-                st.rerun()
 
         with col_btn3:
-            if st.button("⏹️ Interromper Processamento", use_container_width=True, disabled=not st.session_state["worker_rodando"]):
+            btn_parar = st.button("⏹️ Interromper Processamento", use_container_width=True, disabled=not st.session_state["worker_rodando"])
+            if btn_parar:
                 st.session_state["parar_solicitado"] = True
-                st.warning("Interrupção agendada.")
+                st.warning("Interrupção agendada. O sistema paralisará após a tarefa atual.")
 
-        with st.expander("⚠️ Reset de Banco de Dados"):
-            confirmar = st.checkbox("Estou ciente.")
-            if st.button("Excluir Banco", type="primary"):
-                if confirmar:
-                    resetar_banco_dados()
-                    st.session_state["ultimos_crops"] = []
-                    st.success("Banco formatado.")
-                    time.sleep(1)
-                    st.rerun()
-                else: st.error("Confirme a operação.")
+        with st.expander("⚠️ Manutenção de Banco de Dados (Reset)"):
+            st.warning("Esta ação é irreversível e excluirá todo o histórico biométrico, filas e cadastros atuais.")
+            confirmar_reset = st.checkbox("Estou ciente e desejo prosseguir com a exclusão dos dados.", key="chk_reset")
+            if st.button("Excluir Banco de Dados", type="primary", key="btn_reset_db"):
+                if not confirmar_reset:
+                    st.error("Confirme a operação marcando a caixa de seleção acima.")
+                else:
+                    try:
+                        resetar_banco_dados()
+                        st.session_state["ultimos_crops"] = []
+                        st.success("Banco de dados formatado com sucesso.")
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Falha operacional: {e}")
 
         st.divider()
+
         stats = obter_estatisticas_sistema()
-        total_fila = sum(stats["fila"].values())
-        concluidas = stats["fila"].get("CONCLUIDO", 0) + stats["fila"].get("SEM_ROSTO", 0) + stats["fila"].get("FALHA", 0)
-        restantes = total_fila - concluidas
-        prog_pct = (concluidas / total_fila) if total_fila > 0 else 0.0
+        fila_stats = stats["fila"]
+        bio_stats = stats["biometria"]
+
+        total_fila = sum(fila_stats.values())
+        concluidas = fila_stats.get("CONCLUIDO", 0) + fila_stats.get("SEM_ROSTO", 0) + fila_stats.get("FALHA", 0)
+        progresso_pct = (concluidas / total_fila) if total_fila > 0 else 0.0
 
         col_s1, col_s2, col_s3, col_s4, col_s5 = st.columns(5)
-        col_s1.markdown(f'<div class="metric-card-clean"><p class="metric-val" style="color:#3b82f6;">{stats["fila"].get("PENDENTE", 0)}</p><p class="metric-lbl">Pendentes</p></div>', unsafe_allow_html=True)
-        col_s2.markdown(f'<div class="metric-card-clean"><p class="metric-val" style="color:#10b981;">{stats["fila"].get("CONCLUIDO", 0)}</p><p class="metric-lbl">Extraídas</p></div>', unsafe_allow_html=True)
-        col_s3.markdown(f'<div class="metric-card-clean"><p class="metric-val" style="color:#f59e0b;">{stats["fila"].get("SEM_ROSTO", 0)}</p><p class="metric-lbl">Sem Face</p></div>', unsafe_allow_html=True)
-        col_s4.markdown(f'<div class="metric-card-alert"><p class="metric-val" style="color:#ef4444;">{stats["biometria"].get("total_individuos", 0)}</p><p class="metric-lbl">Únicos</p></div>', unsafe_allow_html=True)
-        col_s5.markdown(f'<div class="metric-card-clean"><p class="metric-val" style="color:#3b82f6;">{stats["biometria"].get("total_ocorrencias", 0)}</p><p class="metric-lbl">Ocorrências</p></div>', unsafe_allow_html=True)
+        with col_s1:
+            st.markdown(f'<div class="metric-card-clean"><p class="metric-val" style="color:#3b82f6;">{fila_stats.get("PENDENTE", 0)}</p><p class="metric-lbl">Pendentes</p></div>', unsafe_allow_html=True)
+        with col_s2:
+            st.markdown(f'<div class="metric-card-clean"><p class="metric-val" style="color:#10b981;">{fila_stats.get("CONCLUIDO", 0)}</p><p class="metric-lbl">Faces Extraídas</p></div>', unsafe_allow_html=True)
+        with col_s3:
+            st.markdown(f'<div class="metric-card-clean"><p class="metric-val" style="color:#f59e0b;">{fila_stats.get("SEM_ROSTO", 0)}</p><p class="metric-lbl">Sem Face</p></div>', unsafe_allow_html=True)
+        with col_s4:
+            st.markdown(f'<div class="metric-card-alert"><p class="metric-val" style="color:#ef4444;">{bio_stats.get("total_individuos", 0)}</p><p class="metric-lbl">Cadastros Únicos</p></div>', unsafe_allow_html=True)
+        with col_s5:
+            st.markdown(f'<div class="metric-card-clean"><p class="metric-val" style="color:#3b82f6;">{bio_stats.get("total_ocorrencias", 0)}</p><p class="metric-lbl">Total Ocorrências</p></div>', unsafe_allow_html=True)
+
+        st.write("")
 
         if st.session_state["worker_rodando"]:
-            prog_bar = st.progress(prog_pct, text=f"Progresso: {prog_pct*100:.1f}% | Restantes: {restantes} de {total_fila}")
+            st.info("Motor de extração ativo. Monitorando tarefas...")
+            
+            prog_bar = st.progress(progresso_pct, text=f"Progresso de Processamento: {progresso_pct*100:.1f}% ({concluidas}/{total_fila})")
             status_live = st.status("Processando...", expanded=True)
-            gallery = st.empty()
-            app_arcface = carregar_modelo_arcface()
+            gallery_placeholder = st.empty()
+
+            app_arcface = carregar_modelo_arcface(confianca_minima)
 
             while st.session_state["worker_rodando"]:
                 if st.session_state["parar_solicitado"]:
-                    status_live.update(label="Interrompido.", state="error")
+                    status_live.update(label="Processamento interrompido pelo operador.", state="error")
                     st.session_state["worker_rodando"] = False
                     st.session_state["parar_solicitado"] = False
                     st.rerun()
@@ -219,210 +250,363 @@ def carregar_painel():
 
                 tarefa = pegar_tarefa_pendente()
                 if not tarefa:
-                    status_live.update(label="Fila esgotada.", state="complete")
+                    status_live.update(label="Fila de processamento esgotada.", state="complete")
                     st.session_state["worker_rodando"] = False
+                    st.success("Todas as tarefas foram concluídas.")
                     break
 
-                t_id, ext_id, cam_rel = tarefa
-                cam_fis = os.path.join(pasta_origem, cam_rel)
-                status_live.write(f"Arquivo: {cam_rel}")
+                tarefa_id, id_extracao, caminho_relativo = tarefa
+                caminho_fisico = os.path.join(pasta_origem, caminho_relativo)
 
-                h_base = calcular_sha256(cam_fis)
-                if not h_base or not os.path.exists(cam_fis):
-                    atualizar_status_tarefa(t_id, 'FALHA')
-                    time.sleep(0.05)
+                status_live.write(f"**ID:** {tarefa_id} | **Lote:** {id_extracao} | **Arquivo:** {caminho_relativo}")
+
+                hash_base = calcular_sha256(caminho_fisico)
+                if not hash_base or not os.path.exists(caminho_fisico):
+                    atualizar_status_tarefa(tarefa_id, 'FALHA')
                     continue
 
-                img = cv2.imread(cam_fis)
-                if img is None:
-                    atualizar_status_tarefa(t_id, 'FALHA')
-                    try:
-                        shutil.copy(cam_fis, os.path.join(pasta_ignoradas, f"falha_{os.path.basename(cam_fis)}"))
-                    except: pass
-                    time.sleep(0.05)
+                img_bgr = cv2.imread(caminho_fisico)
+                if img_bgr is None:
+                    atualizar_status_tarefa(tarefa_id, 'FALHA')
                     continue
 
-                faces = app_arcface.get(img)
-                if not faces:
-                    atualizar_status_tarefa(t_id, 'SEM_ROSTO')
-                    cv2.imwrite(os.path.join(pasta_ignoradas, f"semrosto_{ext_id}_{os.path.basename(cam_fis)}"), img)
+                faces = app_arcface.get(img_bgr)
+
+                if len(faces) == 0:
+                    atualizar_status_tarefa(tarefa_id, 'SEM_ROSTO')
                 else:
-                    rosto_salvo = False
-                    for idx, f in enumerate(faces, 1):
-                        valido, motivo = validar_geometria_face(f, img.shape, confianca_minima, tamanho_min_face)
-                        if not valido:
+                    for f_idx, face in enumerate(faces, start=1):
+                        bbox = face.bbox.astype(int)
+                        x1, y1 = max(0, bbox[0]), max(0, bbox[1])
+                        x2, y2 = min(img_bgr.shape[1], bbox[2]), min(img_bgr.shape[0], bbox[3])
+                        alt = y2 - y1
+                        larg = x2 - x1
+                        prop = larg / float(alt) if alt > 0 else 0
+                        
+                        score = face.det_score if hasattr(face, 'det_score') else 0.0
+                        rosto_recortado = img_bgr[y1:y2, x1:x2]
+
+                        if alt < tamanho_min_face or larg < tamanho_min_face or prop < 0.55 or prop > 1.35:
+                            if rosto_recortado.size > 0:
+                                nome_debug = f"lixo_score{score:.2f}_alt{alt}_larg{larg}_{hash_base[:6]}.jpg"
+                                cv2.imwrite(os.path.join(pasta_rejeitados, nome_debug), rosto_recortado)
                             continue
 
-                        bx = f.bbox.astype(int)
-                        x1, y1, x2, y2 = max(0, bx[0]), max(0, bx[1]), min(img.shape[1], bx[2]), min(img.shape[0], bx[3])
-                        alt_rosto, larg_rosto = y2 - y1, x2 - x1
+                        vetor_512d = face.embedding.astype(np.float32)
+                        hash_face = hashlib.sha256(f"{hash_base}_face_{f_idx}".encode()).hexdigest()
+                        caminho_crop_rel = f"crop_virtual_{id_extracao}_{f_idx}.jpg"
 
-                        rosto_salvo = True
-                        margem_y, margem_x = int(alt_rosto * 0.20), int(larg_rosto * 0.20)
-                        x1_n, y1_n = max(0, x1 - margem_x), max(0, y1 - margem_y)
-                        x2_n, y2_n = min(img.shape[1], x2 + margem_x), min(img.shape[0], y2 + margem_y)
+                        status, ind_id, historico_lotes = registrar_face(
+                            vetor_512d=vetor_512d,
+                            hash_foto=hash_face,
+                            id_extracao=id_extracao,
+                            caminho_original=caminho_relativo,
+                            caminho_crop=caminho_crop_rel,
+                            limite_distancia=tolerancia_match
+                        )
 
-                        crop = img[y1_n:y2_n, x1_n:x2_n]
-                        
-                        # Extrai embedding com normalizacao unitaria L2
-                        if hasattr(f, 'normed_embedding') and f.normed_embedding is not None:
-                            vec = f.normed_embedding.astype(np.float32)
-                        else:
-                            vec = f.embedding.astype(np.float32)
-                            norma = np.linalg.norm(vec)
-                            if norma > 0:
-                                vec = vec / norma
+                        pasta_suspeito = os.path.join(pasta_destino, str(ind_id))
+                        os.makedirs(pasta_suspeito, exist_ok=True)
+                        nome_crop = f"celular_{id_extracao}_face_{f_idx}.jpg"
+                        caminho_final_crop = os.path.join(pasta_suspeito, nome_crop)
 
-                        h_face = hashlib.sha256(f"{h_base}_f{idx}".encode()).hexdigest()
-                        c_crop = f"crop_{ext_id}_{idx}.jpg"
+                        if rosto_recortado.size > 0:
+                            cv2.imwrite(caminho_final_crop, rosto_recortado)
                         
-                        stt, ind_id, _ = registrar_face(vec, h_face, ext_id, cam_rel, c_crop, limite_distancia=tolerancia_match)
-                        
-                        p_susp = os.path.join(pasta_destino, str(ind_id))
-                        os.makedirs(p_susp, exist_ok=True)
-                        p_final = os.path.join(p_susp, f"celular_{ext_id}_f{idx}.jpg")
-                        
-                        if crop.size > 0: cv2.imwrite(p_final, crop)
-                        
-                        st.session_state["ultimos_crops"].insert(0, {"caminho": p_final, "status": stt, "lote": ext_id})
-                        if len(st.session_state["ultimos_crops"]) > 12: st.session_state["ultimos_crops"].pop()
-                    
-                    if rosto_salvo:
-                        atualizar_status_tarefa(t_id, 'CONCLUIDO')
-                    else:
-                        atualizar_status_tarefa(t_id, 'SEM_ROSTO')
-                        cv2.imwrite(os.path.join(pasta_ignoradas, f"rejeitada_filtro_{ext_id}_{os.path.basename(cam_fis)}"), img)
+                        st.session_state["ultimos_crops"].insert(0, {
+                            "caminho": caminho_final_crop,
+                            "id": str(ind_id),
+                            "status": status,
+                            "lote": id_extracao
+                        })
+                        if len(st.session_state["ultimos_crops"]) > 12:
+                            st.session_state["ultimos_crops"].pop()
+
+                atualizar_status_tarefa(tarefa_id, 'CONCLUIDO')
 
                 stats_live = obter_estatisticas_sistema()
-                t_fil = sum(stats_live["fila"].values())
-                c_fil = stats_live["fila"].get("CONCLUIDO", 0) + stats_live["fila"].get("SEM_ROSTO", 0) + stats_live["fila"].get("FALHA", 0)
-                rest = t_fil - c_fil
+                f_st = stats_live["fila"]
+                t_fil = sum(f_st.values())
+                c_fil = f_st.get("CONCLUIDO", 0) + f_st.get("SEM_ROSTO", 0) + f_st.get("FALHA", 0)
                 p_pct = (c_fil / t_fil) if t_fil > 0 else 0.0
-                prog_bar.progress(p_pct, text=f"Progresso: {p_pct*100:.1f}% | Restantes: {rest} de {t_fil}")
-                
-                with gallery.container():
+                prog_bar.progress(p_pct, text=f"Progresso de Processamento: {p_pct*100:.1f}% ({c_fil}/{t_fil})")
+
+                with gallery_placeholder.container():
+                    st.caption("Recortes Recentes:")
                     if st.session_state["ultimos_crops"]:
-                        cg = st.columns(6)
-                        for i, it in enumerate(st.session_state["ultimos_crops"][:6]):
-                            if os.path.exists(it["caminho"]): cg[i%6].image(it["caminho"], width=110)
-                
-                time.sleep(0.05)
+                        cols_g = st.columns(min(len(st.session_state["ultimos_crops"]), 6))
+                        for idx_g, item_g in enumerate(st.session_state["ultimos_crops"][:6]):
+                            with cols_g[idx_g % 6]:
+                                if os.path.exists(item_g["caminho"]):
+                                    st.image(item_g["caminho"], caption=f"{item_g['status']} | {item_g['lote']}", width=110)
 
         if not st.session_state["worker_rodando"] and st.session_state["ultimos_crops"]:
-            st.caption("Últimos Recortes:")
-            cg = st.columns(6)
-            for i, it in enumerate(st.session_state["ultimos_crops"][:6]):
-                if os.path.exists(it["caminho"]): cg[i%6].image(it["caminho"], width=110)
+            st.caption("Histórico de Recortes:")
+            cols_g = st.columns(min(len(st.session_state["ultimos_crops"]), 6))
+            for idx_g, item_g in enumerate(st.session_state["ultimos_crops"][:6]):
+                with cols_g[idx_g % 6]:
+                    if os.path.exists(item_g["caminho"]):
+                        st.image(item_g["caminho"], caption=f"{item_g['status']} | {item_g['lote']}", width=110)
 
     with aba2:
-        st.subheader("Auditoria de Identidades")
-        pasta_audit = st.text_input("Armazenamento:", value=pasta_destino)
-        if os.path.exists(pasta_audit):
-            ids = [d for d in os.listdir(pasta_audit) if os.path.isdir(os.path.join(pasta_audit, d))]
-            reinc, tot_crops, lotes_map, dados = 0, 0, set(), []
-            for i in ids:
-                cid = os.path.join(pasta_audit, i)
-                fts = [f for f in os.listdir(cid) if f.lower().endswith(('.jpg', '.png'))]
-                q = len(fts)
-                tot_crops += q
-                lts = set(f.split("_")[1] if "celular_" in f and len(f.split("_"))>1 else "Geral" for f in fts)
-                lotes_map.update(lts)
-                e_reinc = q > 1 or len(lts) > 1
-                if e_reinc: reinc += 1
-                dados.append({"id": i, "caminho": cid, "fotos": fts, "qtd": q, "lotes": list(lts), "reincidente": e_reinc})
-
-            k1, k2, k3, k4 = st.columns(4)
-            k1.markdown(f'<div class="metric-card-clean"><p class="metric-val" style="color:#3b82f6;">{len(ids)}</p><p class="metric-lbl">Cadastros</p></div>', unsafe_allow_html=True)
-            k2.markdown(f'<div class="metric-card-alert"><p class="metric-val" style="color:#ef4444;">{reinc}</p><p class="metric-lbl">Reincidentes</p></div>', unsafe_allow_html=True)
-            k3.markdown(f'<div class="metric-card-clean"><p class="metric-val" style="color:#10b981;">{tot_crops}</p><p class="metric-lbl">Evidências</p></div>', unsafe_allow_html=True)
-            k4.markdown(f'<div class="metric-card-clean"><p class="metric-val" style="color:#f59e0b;">{len(lotes_map)}</p><p class="metric-lbl">Lotes</p></div>', unsafe_allow_html=True)
-
-            cf1, cf2 = st.columns([1.2, 2])
-            filtro = cf1.radio("Exibir:", ["Apenas Reincidentes", "Todos"])
-            busca = cf2.text_input("Filtrar:").strip().lower()
-
-            exibir = [d for d in dados if not (filtro == "Apenas Reincidentes" and not d["reincidente"]) and (not busca or busca in d["id"].lower() or any(busca in l.lower() for l in d["lotes"]))]
+        st.subheader("Auditoria de Identidades e Reincidências")
+        
+        pasta_crops_audit = st.text_input("Diretório de Armazenamento de Identidades:", value=caminho_padrao_destino, key="path_crops_audit")
+        
+        if not os.path.exists(pasta_crops_audit):
+            st.warning(f"Diretório '{pasta_crops_audit}' inacessível.")
+        else:
+            ids_suspeitos = [d for d in os.listdir(pasta_crops_audit) if os.path.isdir(os.path.join(pasta_crops_audit, d))]
             
-            for d in exibir:
-                bdg = '<span class="badge-reincidente">REINCIDENTE</span>' if d["reincidente"] else '<span class="badge-lote">ÚNICO</span>'
-                with st.expander(f"{d['id']} | {d['qtd']} evidência(s)", expanded=d["reincidente"]):
-                    st.markdown(f"{bdg} Origens: {', '.join(d['lotes'])}", unsafe_allow_html=True)
-                    cc = st.columns(7)
-                    for idx, ft in enumerate(d["fotos"]):
-                        c_ft = os.path.join(d["caminho"], ft)
-                        if os.path.exists(c_ft): cc[idx%7].image(c_ft, width=120)
+            total_individuos = len(ids_suspeitos)
+            total_crops = 0
+            reincidentes_count = 0
+            lotes_mapeados = set()
+            dados_suspeitos = []
+
+            for ind_id in ids_suspeitos:
+                caminho_id = os.path.join(pasta_crops_audit, ind_id)
+                fotos = [f for f in os.listdir(caminho_id) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+                
+                qtd_fotos = len(fotos)
+                total_crops += qtd_fotos
+                
+                lotes_do_suspeito = set()
+                for foto in fotos:
+                    if "celular_" in foto:
+                        partes = foto.split("_")
+                        if len(partes) > 1:
+                            lotes_do_suspeito.add(partes[1])
+                    else:
+                        lotes_do_suspeito.add("Geral")
+                
+                lotes_mapeados.update(lotes_do_suspeito)
+                
+                eh_reincidente = qtd_fotos > 1 or len(lotes_do_suspeito) > 1
+                if eh_reincidente:
+                    reincidentes_count += 1
+                    
+                dados_suspeitos.append({
+                    "id": ind_id,
+                    "caminho": caminho_id,
+                    "fotos": fotos,
+                    "qtd_fotos": qtd_fotos,
+                    "lotes": list(lotes_do_suspeito),
+                    "reincidente": eh_reincidente
+                })
+
+            col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+            with col_kpi1:
+                st.markdown(f'<div class="metric-card-clean"><p class="metric-val" style="color:#3b82f6;">{total_individuos}</p><p class="metric-lbl">Total de Cadastros</p></div>', unsafe_allow_html=True)
+            with col_kpi2:
+                st.markdown(f'<div class="metric-card-alert"><p class="metric-val" style="color:#ef4444;">{reincidentes_count}</p><p class="metric-lbl">Reincidentes Mapeados</p></div>', unsafe_allow_html=True)
+            with col_kpi3:
+                st.markdown(f'<div class="metric-card-clean"><p class="metric-val" style="color:#10b981;">{total_crops}</p><p class="metric-lbl">Evidências Salvas</p></div>', unsafe_allow_html=True)
+            with col_kpi4:
+                st.markdown(f'<div class="metric-card-clean"><p class="metric-val" style="color:#f59e0b;">{len(lotes_mapeados)}</p><p class="metric-lbl">Lotes Analisados</p></div>', unsafe_allow_html=True)
+
+            st.write("")
+            
+            col_filtro1, col_filtro2 = st.columns([1.2, 2])
+            with col_filtro1:
+                filtro_modo = st.radio("Critério de Exibição:", ["Apenas Reincidentes", "Todos os Registros"], horizontal=True, key="filtro_auditoria")
+            with col_filtro2:
+                termo_busca = st.text_input("Filtrar por Identificador ou Lote:", value="", placeholder="Ex: celular_01...", key="busca_auditoria").strip().lower()
+
+            st.write("")
+
+            suspeitos_exibir = []
+            for item in dados_suspeitos:
+                if filtro_modo == "Apenas Reincidentes" and not item["reincidente"]:
+                    continue
+                if termo_busca:
+                    match_id = termo_busca in item["id"].lower()
+                    match_lote = any(termo_busca in l.lower() for l in item["lotes"])
+                    if not (match_id or match_lote):
+                        continue
+                suspeitos_exibir.append(item)
+
+            if not suspeitos_exibir:
+                st.info("Nenhum dado localizado para os critérios informados.")
+            else:
+                st.caption(f"Retornando {len(suspeitos_exibir)} registro(s).")
+
+                for item in suspeitos_exibir:
+                    status_badge = '<span class="badge-reincidente">REINCIDENTE</span>' if item["reincidente"] else '<span class="badge-lote">REGISTRO ÚNICO</span>'
+                    lotes_str = ", ".join(item["lotes"])
+                    
+                    header_card = f"Identificação: {item['id']} | {item['qtd_fotos']} evidência(s) em {len(item['lotes'])} lote(s)"
+                    
+                    with st.expander(header_card, expanded=item["reincidente"]):
+                        st.markdown(f"{status_badge} &nbsp; <span style='color:#94a3b8; font-size:0.85rem;'><b>Origem:</b> {lotes_str}</span>", unsafe_allow_html=True)
+                        st.write("")
+                        
+                        cols = st.columns(min(len(item["fotos"]), 7))
+                        for idx, foto_nome in enumerate(item["fotos"]):
+                            caminho_foto = os.path.join(item["caminho"], foto_nome)
+                            
+                            lote_origem = "Geral"
+                            if "celular_" in foto_nome:
+                                partes = foto_nome.split("_")
+                                if len(partes) > 1:
+                                    lote_origem = partes[1]
+                                    
+                            with cols[idx % 7]:
+                                if os.path.exists(caminho_foto):
+                                    st.image(caminho_foto, caption=f"{lote_origem}", width=120)
 
     with aba3:
-        st.subheader("Busca por Referência")
+        st.subheader("Busca de Identidades por Referência")
+
         c1, c2 = st.columns([1.2, 1])
+        
+        caminho_padrao_ref = r"C:\Users\saulo.borges\Downloads\facial_teste\referencia"
+        
         with c1:
-            opc = st.radio("Entrada:", ["Diretório Local", "Upload"])
-            cam_img, b_up = None, None
-            if opc == "Diretório Local":
-                p_ref = st.text_input("Pasta:", value=caminho_padrao_ref)
-                if os.path.exists(p_ref):
-                    fs = [f for f in os.listdir(p_ref) if f.lower().endswith(('.jpg', '.png'))]
-                    if fs: cam_img = os.path.join(p_ref, st.selectbox("Arquivo:", fs))
+            opcao_origem = st.radio("Método de Entrada:", ["Diretório Local", "Upload Manual"], horizontal=True, key="origem_ref")
+            
+            caminho_imagem_analisar = None
+            imagem_bytes_upload = None
+
+            if opcao_origem == "Diretório Local":
+                pasta_ref_input = st.text_input("Caminho do Diretório:", value=caminho_padrao_ref, key="path_ref")
+                if os.path.exists(pasta_ref_input):
+                    fotos_ref = [f for f in os.listdir(pasta_ref_input) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+                    if fotos_ref:
+                        foto_selecionada = st.selectbox("Selecione o arquivo:", fotos_ref, key="sel_ref")
+                        caminho_imagem_analisar = os.path.join(pasta_ref_input, foto_selecionada)
+                    else:
+                        st.warning("Diretório vazio ou sem imagens compatíveis.")
+                else:
+                    st.error("Caminho especificado inválido.")
             else:
-                up = st.file_uploader("Arquivo:")
-                if up: b_up = up.read()
+                uploaded_file = st.file_uploader("Selecionar Arquivo:", type=["jpg", "jpeg", "png"], key="up_ref")
+                if uploaded_file is not None:
+                    imagem_bytes_upload = uploaded_file.read()
+
         with c2:
+            st.caption("Visualização:")
             img_bgr = None
-            if cam_img and os.path.exists(cam_img):
-                img_bgr = cv2.imread(cam_img)
+            
+            if caminho_imagem_analisar and os.path.exists(caminho_imagem_analisar):
+                img_bgr = cv2.imread(caminho_imagem_analisar)
                 st.image(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB), width=180)
-            elif b_up:
-                img_bgr = cv2.imdecode(np.frombuffer(b_up, np.uint8), cv2.IMREAD_COLOR)
+            elif imagem_bytes_upload is not None:
+                nparr = np.frombuffer(imagem_bytes_upload, np.uint8)
+                img_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                 st.image(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB), width=180)
 
-        if st.button("Pesquisar", type="primary"):
-            if img_bgr is None: st.error("Imagem inválida.")
+        st.write("")
+
+        if st.button("Executar Pesquisa Vetorial", type="primary", key="btn_ref"):
+            if img_bgr is None:
+                st.error("Forneça uma imagem válida para iniciar a varredura.")
             else:
-                pb = st.progress(25)
-                sb = st.status("Extraindo...", expanded=True)
-                app = carregar_modelo_arcface()
-                if not app: sb.update(label="Erro", state="error")
+                progress_bar = st.progress(0, text="Iniciando plataforma...")
+                status_box = st.status("Processando biometria...", expanded=True)
+                
+                status_box.write("Carregando arquitetura neural...")
+                progress_bar.progress(25, text="Carregando modelo...")
+                app_arcface = carregar_modelo_arcface(confianca_minima)
+                
+                if app_arcface is None:
+                    status_box.update(label="Falha de inicialização.", state="error")
+                    st.error("Erro interno ao carregar dependências biométricas.")
                 else:
-                    raw_faces = app.get(img_bgr)
-                    fs = [f for f in raw_faces if validar_geometria_face(f, img_bgr.shape, conf_min=confianca_minima, tam_min=tamanho_min_face)[0]]
-                    if not fs:
-                        sb.update(label="Nenhum rosto válido detectado com os filtros atuais.", state="error")
-                        pb.progress(100)
+                    status_box.write("Extraindo features em alta resolução...")
+                    progress_bar.progress(50, text="Localizando faces...")
+                    
+                    faces_raw = app_arcface.get(img_bgr)
+
+                    faces_validas = []
+                    for f in faces_raw:
+                        bbox = f.bbox.astype(int)
+                        x1, y1 = max(0, bbox[0]), max(0, bbox[1])
+                        x2, y2 = min(img_bgr.shape[1], bbox[2]), min(img_bgr.shape[0], bbox[3])
+                        alt = y2 - y1
+                        larg = x2 - x1
+                        prop = larg / float(alt) if alt > 0 else 0
+                        if alt < tamanho_min_face or larg < tamanho_min_face or prop < 0.65 or prop > 1.25:
+                            pass
+                        else:
+                            faces_validas.append(f)
+
+                    if len(faces_validas) == 0:
+                        status_box.update(label="Padrão biométrico não identificado.", state="warning")
+                        progress_bar.progress(100, text="Processo finalizado sem extração.")
+                        st.warning("Não foi possível isolar características faciais com o ArcFace.")
                     else:
-                        pb.progress(75)
-                        sb.update(label="Pesquisa concluída.", state="complete")
-                        pb.progress(100)
-                        for i, f in enumerate(fs, 1):
-                            if hasattr(f, 'normed_embedding') and f.normed_embedding is not None:
-                                vec_ref = f.normed_embedding.astype(np.float32)
-                            else:
-                                vec_ref = f.embedding.astype(np.float32)
-                                norma = np.linalg.norm(vec_ref)
-                                if norma > 0: vec_ref = vec_ref / norma
+                        status_box.write(f"Consultando banco vetorial para {len(faces_validas)} biometria(s)...")
+                        progress_bar.progress(75, text="Executando query no PostgreSQL...")
+                        
+                        time.sleep(0.3)
+                        progress_bar.progress(100, text="Concluído.")
+                        status_box.update(label="Pesquisa finalizada.", state="complete")
+                        
+                        for idx_f, face in enumerate(faces_validas, start=1):
+                            vetor_512d = face.embedding.astype(np.float32)
+                            resultados = buscar_historico_completo_por_vetor(vetor_512d, limite_distancia=tolerancia_match)
                             
-                            res = buscar_historico_completo_por_vetor(vec_ref, limite_distancia=tolerancia_match)
-                            conf_pct = float(f.det_score) * 100.0 if hasattr(f, 'det_score') and f.det_score else 0.0
-                            st.write(f"#### Perfil #{i} (Confiança de Detecção: {conf_pct:.1f}%)")
-                            if not res:
-                                st.info("Inédito na base (nenhuma correspondência encontrada com a tolerância configurada).")
+                            st.write(f"#### Perfil Identificado #{idx_f}")
+                            
+                            if not resultados:
+                                st.info("Sem correspondência histórica. Registro inédito no sistema.")
                             else:
-                                for r in res:
-                                    c_r1, c_r2 = st.columns([1.2, 2.0])
-                                    dist = float(r["distancia"])
-                                    simil = max(0.0, (1.0 - dist) * 100.0)
+                                for res in resultados:
+                                    ind_id = res["individuo_id"]
+                                    dist = res["distancia"]
+                                    ocorrencias = res["ocorrencias"]
                                     
-                                    # Calibracao dos badges de correspondencia
-                                    if dist <= (tolerancia_match - 0.05):
-                                        bdg = '<span class="badge-reincidente">MATCH FORTE</span>'
-                                    elif dist <= tolerancia_match:
-                                        bdg = '<span class="badge-match">MATCH PROVÁVEL</span>'
-                                    else:
-                                        bdg = '<span class="badge-lote">PARCIAL</span>'
+                                    lotes_unicos = sorted(list(set(oc["lote"] for oc in ocorrencias)))
+                                    
+                                    col_res1, col_res2 = st.columns([1, 2.2])
+                                    
+                                    with col_res1:
+                                        if dist <= 0.38:
+                                            st.markdown('<span class="badge-reincidente">MATCH POSITIVO</span>', unsafe_allow_html=True)
+                                        else:
+                                            st.markdown('<span class="badge-lote">CORRESPONDÊNCIA PARCIAL</span>', unsafe_allow_html=True)
                                         
-                                    c_r1.markdown(bdg, unsafe_allow_html=True)
-                                    c_r1.markdown(f"**ID:** `{r['individuo_id']}`<br>**Similaridade:** `{simil:.1f}%`<br>**Distância:** `{dist:.4f}`", unsafe_allow_html=True)
-                                    df_o = pd.DataFrame(r["ocorrencias"])
-                                    if not df_o.empty: c_r2.dataframe(df_o[['lote', 'caminho_arquivo', 'data_ocorrencia']])
+                                        st.write("")
+                                        st.markdown(f"**Identificador:** `{ind_id}`")
+                                        st.markdown(f"**Proximidade:** `{dist:.4f}`")
+                                        st.markdown(f"**Frequência:** `{len(ocorrencias)}`")
+                                        st.markdown(f"**Origens:** `{', '.join(lotes_unicos)}`")
+                                        
+                                    with col_res2:
+                                        st.caption("Detalhamento de Ocorrências:")
+                                        df_oc = pd.DataFrame(ocorrencias)
+                                        if not df_oc.empty:
+                                            df_oc_display = df_oc[['lote', 'caminho_arquivo', 'data_ocorrencia']].rename(columns={
+                                                'lote': 'Lote',
+                                                'caminho_arquivo': 'Arquivo Matriz',
+                                                'data_ocorrencia': 'Registro'
+                                            })
+                                            st.dataframe(df_oc_display, use_container_width=True)
+
+                                    st.caption("Acervo Biométrico Mapeado (Disco Físico):")
+                                    
+                                    pasta_fisica_id = os.path.join(caminho_padrao_destino, str(ind_id))
+                                    if os.path.exists(pasta_fisica_id):
+                                        fotos_reais = [f for f in os.listdir(pasta_fisica_id) if f.lower().endswith(('.jpg', '.png'))]
+                                        
+                                        if fotos_reais:
+                                            cols_oc = st.columns(min(len(fotos_reais), 7))
+                                            for idx_oc, foto_nome in enumerate(fotos_reais):
+                                                caminho_crop_full = os.path.join(pasta_fisica_id, foto_nome)
+                                                
+                                                lote_origem = "Geral"
+                                                if "celular_" in foto_nome:
+                                                    partes = foto_nome.split("_")
+                                                    if len(partes) > 1:
+                                                        lote_origem = partes[1]
+                                                        
+                                                with cols_oc[idx_oc % 7]:
+                                                    st.image(caminho_crop_full, caption=f"{lote_origem}", width=110)
+                                        else:
+                                            st.caption("Pasta física encontrada, mas está vazia.")
+                                    else:
+                                        st.warning("Imagens físicas ausentes ou deletadas do diretório.")
 
 if __name__ == "__main__":
     carregar_painel()
