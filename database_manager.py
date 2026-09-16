@@ -2,9 +2,6 @@ import psycopg2
 import numpy as np
 from pgvector.psycopg2 import register_vector
 
-# ==========================================
-# CONFIGURAÇÕES DO BANCO
-# ==========================================
 DB_CONFIG = {
     "dbname": "idhunter_db",
     "user": "perito",
@@ -52,10 +49,17 @@ def inicializar_banco():
         );
     """)
     
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_individuos_embedding_hnsw 
+        ON individuos 
+        USING hnsw (embedding vector_cosine_ops) 
+        WITH (m = 16, ef_construction = 64);
+    """)
+    
     conn.commit()
     cursor.close()
     conn.close()
-    print("[BANCO] Tabelas 'individuos', 'ocorrencias' e 'fila_processamento' estruturadas.")
+    print("[BANCO] Tabelas e índice HNSW inicializados com sucesso.")
 
 def resetar_banco_dados():
     conn = conectar_banco()
@@ -87,7 +91,6 @@ def buscar_similar(vetor_novo, limite_distancia=0.50):
     
     cursor.close()
     conn.close()
-    
     return resultado
 
 def buscar_historico_completo_por_vetor(vetor_novo, limite_distancia=0.50):
@@ -122,7 +125,7 @@ def buscar_historico_completo_por_vetor(vetor_novo, limite_distancia=0.50):
         
         resultados.append({
             "individuo_id": ind_id,
-            "distancia": dist,
+            "distancia": float(dist),
             "ocorrencias": [
                 {
                     "lote": oc[0],
@@ -137,7 +140,6 @@ def buscar_historico_completo_por_vetor(vetor_novo, limite_distancia=0.50):
     cursor.close()
     conn.close()
     return resultados
-
 
 def registrar_face(vetor_512d, hash_foto, id_extracao, caminho_original, caminho_crop, limite_distancia=0.50):
     conn = conectar_banco()
@@ -156,22 +158,18 @@ def registrar_face(vetor_512d, hash_foto, id_extracao, caminho_original, caminho
             individuo_id = match[0]
             status = "REINCIDENTE"
             
-            # Atualização suave do centróide (80% histórico + 20% nova observação)
             try:
                 cursor.execute("SELECT embedding FROM individuos WHERE id = %s;", (individuo_id,))
                 row_emb = cursor.fetchone()
                 if row_emb and row_emb[0] is not None:
-                    if hasattr(row_emb[0], 'to_numpy'):
-                        v_old = row_emb[0].to_numpy().astype(np.float32)
-                    else:
-                        v_old = np.array(row_emb[0], dtype=np.float32)
+                    v_old = np.array(row_emb[0], dtype=np.float32)
                     v_blend = 0.80 * v_old + 0.20 * vetor_arr
                     norm_blend = np.linalg.norm(v_blend)
                     if norm_blend > 0:
                         v_blend = v_blend / norm_blend
                     cursor.execute("UPDATE individuos SET embedding = %s WHERE id = %s;", (v_blend, individuo_id))
             except Exception as e_blend:
-                print(f"[AVISO] Falha ao atualizar centroide do individuo: {e_blend}")
+                print(f"[AVISO] Falha ao atualizar centroide: {e_blend}")
             
             cursor.execute("""
                 SELECT DISTINCT id_extracao 
@@ -194,7 +192,6 @@ def registrar_face(vetor_512d, hash_foto, id_extracao, caminho_original, caminho
         cursor.execute(sql_ocorrencia, (individuo_id, id_extracao, hash_foto, caminho_original, caminho_crop))
         
         conn.commit()
-        
         return status, individuo_id, historico_lotes
         
     except psycopg2.IntegrityError:
@@ -218,10 +215,6 @@ def enfileirar_tarefa(id_extracao, caminho_arquivo):
     finally:
         cursor.close()
         conn.close()
-
-
-if __name__ == "__main__":
-    inicializar_banco()
 
 def pegar_tarefa_pendente():
     conn = conectar_banco()
@@ -283,6 +276,20 @@ def obter_estatisticas_sistema():
         estatisticas["biometria"]["total_ocorrencias"] = cursor.fetchone()[0]
         
         return estatisticas
+    finally:
+        cursor.close()
+        conn.close()
+
+if __name__ == "__main__":
+    inicializar_banco()
+
+def obter_todas_tarefas_pendentes():
+    conn = conectar_banco()
+    cursor = conn.cursor()
+    try:
+        sql = "SELECT id, id_extracao, caminho_arquivo FROM fila_processamento WHERE status = 'PENDENTE';"
+        cursor.execute(sql)
+        return cursor.fetchall()
     finally:
         cursor.close()
         conn.close()
