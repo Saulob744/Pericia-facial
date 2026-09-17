@@ -5,14 +5,9 @@ import numpy as np
 import pandas as pd
 import warnings
 import time
-import hashlib
 
 from database_manager import (
-    enfileirar_tarefa,
-    pegar_tarefa_pendente,
     obter_todas_tarefas_pendentes,
-    atualizar_status_tarefa,
-    registrar_face,
     obter_estatisticas_sistema,
     buscar_historico_completo_por_vetor,
     resetar_banco_dados
@@ -29,6 +24,18 @@ st.markdown("""
     .stApp { background-color: #0b0f19; color: #f8fafc; }
     p, span, label, div { color: #cbd5e1; }
     .stMarkdown p { color: #cbd5e1 !important; font-size: 0.95rem; }
+    
+    [data-testid="stSidebar"],
+    [data-testid="stSidebar"] p, 
+    [data-testid="stSidebar"] span, 
+    [data-testid="stSidebar"] label, 
+    [data-testid="stSidebar"] div,
+    [data-testid="stSidebar"] h1,
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3 { 
+        color: #000000 !important; 
+    }
+
     .pericia-header {
         background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
         padding: 24px 32px;
@@ -93,8 +100,7 @@ def carregar_modelo_arcface(confianca_atual):
         app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
         app.prepare(ctx_id=0, det_size=(640, 640), det_thresh=confianca_atual)          
         return app
-    except Exception as e:
-        st.error(f"Erro ao inicializar o motor ArcFace: {e}")
+    except Exception:
         return None
 
 @st.fragment(run_every="3s")
@@ -140,6 +146,9 @@ def carregar_painel():
     tamanho_min_face = st.sidebar.slider("Tamanho Mínimo (px)", 15, 100, 30, 5)
     st.sidebar.markdown("---")
 
+    caminho_padrao_origem = os.getenv("PASTA_ORIGEM", r"C:\Users\saulo.borges\Downloads\facial_teste\entradas_celular")
+    caminho_padrao_destino = os.getenv("PASTA_DESTINO", r"C:\Users\saulo.borges\Downloads\facial_teste\armazenamento_crops")
+
     aba1, aba2, aba3 = st.tabs([
         "🔬 Processamento e Fila",
         "📂 Auditoria e Reincidência",
@@ -149,9 +158,6 @@ def carregar_painel():
     with aba1:
         st.subheader("Processamento de Evidências")
         st.caption("Controle de ingestão de arquivos e execução de extração facial distribuída.")
-
-        caminho_padrao_origem = r"C:\Users\saulo.borges\Downloads\facial_teste\entradas_celular"
-        caminho_padrao_destino = r"C:\Users\saulo.borges\Downloads\facial_teste\armazenamento_crops"
         
         col_p1, col_p2 = st.columns(2)
         with col_p1:
@@ -164,7 +170,7 @@ def carregar_painel():
         col_btn1, col_btn2 = st.columns(2)
 
         with col_btn1:
-            if st.button("📋 Alimentar Fila de Processamento", use_container_width=True):
+            if st.button("📋 Alimentar Fila de Processamento"):
                 if not os.path.exists(pasta_origem):
                     st.error(f"Diretório '{pasta_origem}' não localizado.")
                 else:
@@ -174,8 +180,8 @@ def carregar_painel():
                     st.success(f"Operação concluída. {total_enfileiradas} registros inseridos na fila.")
 
         with col_btn2:
-            if st.button("▶️ Despachar para Workers", type="primary", use_container_width=True):
-                with st.spinner("Despachando tarefas para a fila do Redis/Celery em lote..."):
+            if st.button("▶️ Iniciar Processamento", type="primary"):
+                with st.spinner("Despachando tarefas para Redis/Celery em lote..."):
                     tarefas = obter_todas_tarefas_pendentes()
                     for t in tarefas:
                         tarefa_id, id_extracao, caminho_relativo = t
@@ -184,7 +190,7 @@ def carregar_painel():
                             tarefa_id, id_extracao, caminho_fisico, 
                             pasta_destino, tolerancia_match, tamanho_min_face
                         )
-                st.success(f"{len(tarefas)} tarefas despachadas com sucesso para os Workers!")
+                st.success(f"{len(tarefas)} tarefas enviadas com sucesso!")
 
         with st.expander("⚠️ Manutenção de Banco de Dados (Reset)"):
             confirmar_reset = st.checkbox("Estou ciente e desejo prosseguir com a exclusão dos dados.", key="chk_reset")
@@ -203,37 +209,40 @@ def carregar_painel():
         pasta_crops_audit = st.text_input("Diretório de Armazenamento de Identidades:", value=caminho_padrao_destino, key="path_crops_audit")
         
         if os.path.exists(pasta_crops_audit):
-            ids_suspeitos = [d for d in os.listdir(pasta_crops_audit) if os.path.isdir(os.path.join(pasta_crops_audit, d))]
-            total_individuos = len(ids_suspeitos)
-            total_crops = 0
-            reincidentes_count = 0
-            lotes_mapeados = set()
-            dados_suspeitos = []
+            with st.spinner("Compilando e indexando registros armazenados..."):
+                ids_suspeitos = [d for d in os.listdir(pasta_crops_audit) if os.path.isdir(os.path.join(pasta_crops_audit, d))]
+                total_individuos = len(ids_suspeitos)
+                total_crops = 0
+                reincidentes_count = 0
+                lotes_mapeados = set()
+                dados_suspeitos = []
 
-            for ind_id in ids_suspeitos:
-                caminho_id = os.path.join(pasta_crops_audit, ind_id)
-                fotos = [f for f in os.listdir(caminho_id) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
-                qtd_fotos = len(fotos)
-                total_crops += qtd_fotos
-                
-                lotes_do_suspeito = set()
-                for foto in fotos:
-                    if "celular_" in foto:
-                        partes = foto.split("_")
-                        if len(partes) > 1:
-                            lotes_do_suspeito.add(partes[1])
-                    else:
-                        lotes_do_suspeito.add("Geral")
-                
-                lotes_mapeados.update(lotes_do_suspeito)
-                eh_reincidente = qtd_fotos > 1 or len(lotes_do_suspeito) > 1
-                if eh_reincidente:
-                    reincidentes_count += 1
+                for ind_id in ids_suspeitos:
+                    caminho_id = os.path.join(pasta_crops_audit, ind_id)
+                    if not os.path.exists(caminho_id):
+                        continue
+                    fotos = [f for f in os.listdir(caminho_id) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+                    qtd_fotos = len(fotos)
+                    total_crops += qtd_fotos
                     
-                dados_suspeitos.append({
-                    "id": ind_id, "caminho": caminho_id, "fotos": fotos,
-                    "qtd_fotos": qtd_fotos, "lotes": list(lotes_do_suspeito), "reincidente": eh_reincidente
-                })
+                    lotes_do_suspeito = set()
+                    for foto in fotos:
+                        if "celular_" in foto:
+                            partes = foto.split("_")
+                            if len(partes) > 1:
+                                lotes_do_suspeito.add(partes[1])
+                        else:
+                            lotes_do_suspeito.add("Geral")
+                    
+                    lotes_mapeados.update(lotes_do_suspeito)
+                    eh_reincidente = qtd_fotos > 1 or len(lotes_do_suspeito) > 1
+                    if eh_reincidente:
+                        reincidentes_count += 1
+                        
+                    dados_suspeitos.append({
+                        "id": ind_id, "caminho": caminho_id, "fotos": fotos,
+                        "qtd_fotos": qtd_fotos, "lotes": list(lotes_do_suspeito), "reincidente": eh_reincidente
+                    })
 
             col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
             with col_kpi1: st.markdown(f'<div class="metric-card-clean"><p class="metric-val" style="color:#3b82f6;">{total_individuos}</p><p class="metric-lbl">Total de Cadastros</p></div>', unsafe_allow_html=True)
@@ -249,20 +258,28 @@ def carregar_painel():
                 termo_busca = st.text_input("Filtrar por ID ou Lote:", value="", key="busca_auditoria").strip().lower()
 
             st.write("")
+            
+            dados_filtrados = []
             for item in dados_suspeitos:
                 if filtro_modo == "Apenas Reincidentes" and not item["reincidente"]: continue
                 if termo_busca and not (termo_busca in item["id"].lower() or any(termo_busca in l.lower() for l in item["lotes"])): continue
-                
+                dados_filtrados.append(item)
+            
+            LIMITE_EXIBICAO = 50
+            if len(dados_filtrados) > LIMITE_EXIBICAO:
+                st.info(f"Otimização de Tela: Exibindo {LIMITE_EXIBICAO} registros de {len(dados_filtrados)}. Utilize os filtros acima para refinar a busca.")
+
+            for item in dados_filtrados[:LIMITE_EXIBICAO]:
                 status_badge = '<span class="badge-reincidente">REINCIDENTE</span>' if item["reincidente"] else '<span class="badge-lote">REGISTRO ÚNICO</span>'
-                with st.expander(f"Identificação: {item['id']} | {item['qtd_fotos']} evidência(s)", expanded=item["reincidente"]):
+                with st.expander(f"Identificação: {item['id']} | {item['qtd_fotos']} evidência(s)", expanded=False):
                     st.markdown(f"{status_badge} &nbsp; <span style='color:#94a3b8; font-size:0.85rem;'><b>Origem:</b> {', '.join(item['lotes'])}</span>", unsafe_allow_html=True)
                     st.write("")
                     cols = st.columns(min(len(item["fotos"]), 7))
-                    for idx, foto_nome in enumerate(item["fotos"]):
+                    for idx, foto_nome in enumerate(item["fotos"][:14]):
                         caminho_foto = os.path.join(item["caminho"], foto_nome)
                         with cols[idx % 7]:
                             if os.path.exists(caminho_foto):
-                                st.image(caminho_foto, width=120)
+                                st.image(caminho_foto, width=100)
 
     with aba3:
         st.subheader("Busca de Identidades por Referência")
@@ -284,38 +301,48 @@ def carregar_painel():
             if img_bgr is None:
                 st.error("Forneça uma imagem válida.")
             else:
-                app_arcface = carregar_modelo_arcface(confianca_minima)
-                if app_arcface is None:
-                    st.error("Erro interno ao carregar dependências biométricas.")
-                else:
-                    faces_raw = app_arcface.get(img_bgr)
-                    faces_validas = [f for f in faces_raw if (min(f.bbox[2]-f.bbox[0], f.bbox[3]-f.bbox[1]) >= tamanho_min_face)]
-                    
-                    if len(faces_validas) == 0:
-                        st.warning("Não foi possível isolar características faciais.")
+                with st.spinner("Extraindo vetores biométricos e varrendo banco de dados..."):
+                    app_arcface = carregar_modelo_arcface(confianca_minima)
+                    if app_arcface is None:
+                        st.error("Erro interno ao carregar dependências biométricas.")
                     else:
-                        st.success(f"{len(faces_validas)} biometria(s) extraídas. Consultando banco...")
-                        for idx_f, face in enumerate(faces_validas, start=1):
-                            vetor_512d = face.embedding.astype(np.float32)
-                            resultados = buscar_historico_completo_por_vetor(vetor_512d, limite_distancia=tolerancia_match)
-                            
-                            st.write(f"#### Perfil #{idx_f}")
-                            if not resultados:
-                                st.info("Sem correspondência histórica.")
-                            else:
-                                for res in resultados:
-                                    ind_id, dist, ocorrencias = res["individuo_id"], res["distancia"], res["ocorrencias"]
-                                    col_res1, col_res2 = st.columns([1, 2.2])
-                                    
-                                    with col_res1:
-                                        if dist <= 0.38: st.markdown('<span class="badge-reincidente">MATCH POSITIVO</span>', unsafe_allow_html=True)
-                                        else: st.markdown('<span class="badge-lote">CORRESPONDÊNCIA PARCIAL</span>', unsafe_allow_html=True)
-                                        st.markdown(f"**ID:** `{ind_id}`<br>**Proximidade:** `{dist:.4f}`", unsafe_allow_html=True)
-                                    
-                                    with col_res2:
-                                        df_oc = pd.DataFrame(ocorrencias)
-                                        if not df_oc.empty:
-                                            st.dataframe(df_oc[['lote', 'caminho_arquivo', 'data_ocorrencia']], use_container_width=True)
+                        faces_raw = app_arcface.get(img_bgr)
+                        faces_validas = [f for f in faces_raw if (min(f.bbox[2]-f.bbox[0], f.bbox[3]-f.bbox[1]) >= tamanho_min_face)]
+                        
+                        if len(faces_validas) == 0:
+                            st.warning("Não foi possível isolar características faciais.")
+                        else:
+                            st.success(f"{len(faces_validas)} biometria(s) extraídas. Analisando resultados...")
+                            for idx_f, face in enumerate(faces_validas, start=1):
+                                vetor_512d = face.embedding.astype(np.float32)
+                                resultados = buscar_historico_completo_por_vetor(vetor_512d, limite_distancia=tolerancia_match)
+                                
+                                st.write(f"#### Perfil #{idx_f}")
+                                if not resultados:
+                                    st.info("Sem correspondência histórica.")
+                                else:
+                                    for res in resultados:
+                                        ind_id, dist, ocorrencias = res["individuo_id"], res["distancia"], res["ocorrencias"]
+                                        col_res1, col_res2 = st.columns([1, 2.2])
+                                        
+                                        with col_res1:
+                                            if dist <= 0.38: st.markdown('<span class="badge-reincidente">MATCH POSITIVO</span>', unsafe_allow_html=True)
+                                            else: st.markdown('<span class="badge-lote">CORRESPONDÊNCIA PARCIAL</span>', unsafe_allow_html=True)
+                                            st.markdown(f"**ID:** `{ind_id}`<br>**Proximidade:** `{dist:.4f}`", unsafe_allow_html=True)
+                                        
+                                        with col_res2:
+                                            pasta_historico = os.path.join(caminho_padrao_destino, str(ind_id))
+                                            if os.path.exists(pasta_historico):
+                                                fotos_historico = [f for f in os.listdir(pasta_historico) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+                                                if fotos_historico:
+                                                    cols_img = st.columns(min(len(fotos_historico), 5))
+                                                    for i_img, f_nome in enumerate(fotos_historico[:5]):
+                                                        with cols_img[i_img]:
+                                                            st.image(os.path.join(pasta_historico, f_nome), width=80)
+                                            
+                                            df_oc = pd.DataFrame(ocorrencias)
+                                            if not df_oc.empty:
+                                                st.dataframe(df_oc[['lote', 'caminho_arquivo', 'data_ocorrencia']])
 
 if __name__ == "__main__":
     carregar_painel()

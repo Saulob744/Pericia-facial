@@ -12,6 +12,56 @@ services:
       - "5454:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    restart: always
+
+  redis_broker:
+    image: redis:7-alpine
+    container_name: idhunter_redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    restart: always
+
+  worker_ia:
+    build: .
+    container_name: idhunter_worker
+    command: celery -A worker worker --loglevel=info --concurrency=4
+    environment:
+      - DB_HOST=db_vetorial
+      - DB_PORT=5432
+      - REDIS_URL=redis://redis_broker:6379/0
+      - PASTA_ORIGEM=/app/dados/entradas
+      - PASTA_DESTINO=/app/dados/crops
+    volumes:
+      - /mnt/storage_pericia/entradas:/app/dados/entradas
+      - /mnt/storage_pericia/crops:/app/dados/crops
+    depends_on:
+      - db_vetorial
+      - redis_broker
+    restart: always
+
+  painel_web:
+    build: .
+    container_name: idhunter_streamlit
+    command: streamlit run id_hunter.py --server.port=8501 --server.address=0.0.0.0
+    environment:
+      - DB_HOST=db_vetorial
+      - DB_PORT=5432
+      - REDIS_URL=redis://redis_broker:6379/0
+      - PASTA_ORIGEM=/app/dados/entradas
+      - PASTA_DESTINO=/app/dados/crops
+    ports:
+      - "80:8501"
+    volumes:
+      - /mnt/storage_pericia/entradas:/app/dados/entradas
+      - /mnt/storage_pericia/crops:/app/dados/crops
+    depends_on:
+      - db_vetorial
+      - redis_broker
+    restart: always
 
 volumes:
   pgdata:
+  redisdata:
