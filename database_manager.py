@@ -262,5 +262,16 @@ def obter_estatisticas_sistema():
         cursor.close()
         conn.close()
 
+def cancelar_tarefas_pendentes():
+    conn = conectar_banco()
+    cursor = conn.cursor()
+    try:
+        sql = "UPDATE fila_processamento SET status = 'CANCELADO' WHERE status IN ('PENDENTE', 'PROCESSANDO');"
+        cursor.execute(sql)
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
 if __name__ == "__main__":
     inicializar_banco()
