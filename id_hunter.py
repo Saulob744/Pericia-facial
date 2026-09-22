@@ -9,7 +9,8 @@ from database_manager import (
     obter_estatisticas_sistema,
     buscar_historico_completo_por_vetor,
     resetar_banco_dados,
-    pegar_tarefa_pendente
+    pegar_tarefa_pendente,
+    obter_reincidentes_banco
 )
 
 from worker import (
@@ -122,45 +123,68 @@ def tab_processamento(pasta_origem, pasta_destino, tolerancia_match, tamanho_min
     st.divider()
     monitorar_progresso_fragment()
 
-def tab_auditoria(pasta_destino):
+def tab_auditoria():
     st.subheader("Auditoria de Reincidentes")
+    
+    if 'limite_auditoria' not in st.session_state:
+        st.session_state.limite_auditoria = 25
+        
+    def carregar_mais_reincidentes():
+        st.session_state.limite_auditoria += 25
+
     termo_busca = st.text_input("Filtrar por ID ou Lote de Reincidente:", value="", key="busca_auditoria").strip().lower()
     
-    if os.path.exists(pasta_destino):
-        ids_suspeitos = sorted([d for d in os.listdir(pasta_destino) if os.path.isdir(os.path.join(pasta_destino, d)) and not d.startswith("_")])
-        
-        reincidentes = []
-        for ind_id in ids_suspeitos:
-            caminho_id = os.path.join(pasta_destino, ind_id)
-            fotos = sorted([f for f in os.listdir(caminho_id) if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
+    reincidentes_banco = obter_reincidentes_banco()
+    
+    reincidentes = []
+    for item in reincidentes_banco:
+        if not termo_busca or termo_busca in item["id"].lower() or any(termo_busca in lote.lower() for lote in item["lotes"]):
+            reincidentes.append(item)
+
+    st.markdown(f"**Total de Reincidentes Filtrados: {len(reincidentes)}**")
+    
+    for item in reincidentes[:st.session_state.limite_auditoria]:
+        with st.expander(f"ID: {item['id']} | {len(item['fotos'])} Aparições distintas", expanded=False):
+            st.markdown(f"<span class='badge badge-reincidente'>REINCIDENTE</span> &nbsp; Origens: {', '.join(item['lotes'])}", unsafe_allow_html=True)
             
-            fotos_unicas = []
-            nomes_vistos = set()
-            for f in fotos:
-                tamanho_arq = os.path.getsize(os.path.join(caminho_id, f))
-                id_unico = f"{f.split('_')[0]}_{tamanho_arq}"
-                if id_unico not in nomes_vistos:
-                    nomes_vistos.add(id_unico)
-                    fotos_unicas.append(f)
-
-            if len(fotos_unicas) > 1:
-                lotes = set([f.split("_")[1] if "celular_" in f and len(f.split("_")) > 1 else "Geral" for f in fotos_unicas])
-                if not termo_busca or termo_busca in ind_id.lower() or any(termo_busca in l.lower() for l in lotes):
-                    reincidentes.append({"id": ind_id, "caminho": caminho_id, "fotos": fotos_unicas, "lotes": list(lotes)})
-
-        st.markdown(f"**Total de Reincidentes Filtrados: {len(reincidentes)}**")
+            cols = st.columns(min(len(item["fotos"]), 6))
+            for idx, foto_path in enumerate(item["fotos"][:6]):
+                with cols[idx]:
+                    nome_arquivo = os.path.basename(foto_path)
+                    
+                    if os.path.exists(foto_path):
+                        st.image(foto_path, use_container_width=True, caption=nome_arquivo)
+                    else:
+                        st.error("Foto movida/apagada")
+                        
+            if len(item["fotos"]) > 6:
+                st.caption(f"+ {len(item['fotos']) - 6} foto(s) ocultada(s) para otimizar desempenho.")
+    
+    if st.session_state.limite_auditoria < len(reincidentes):
+        st.markdown("""
+            <style>
+            div[data-testid="stButton"] button[kind="primary"] {
+                background-color: #f8fafc !important;
+                color: #0f172a !important;
+                font-weight: 800 !important;
+                border: 2px solid #3b82f6 !important;
+            }
+            div[data-testid="stButton"] button[kind="primary"]:hover {
+                background-color: #cbd5e1 !important;
+                border-color: #2563eb !important;
+            }
+            </style>
+        """, unsafe_allow_html=True)
         
-        for item in reincidentes[:25]:
-            with st.expander(f"ID: {item['id']} | {len(item['fotos'])} Aparições distintas", expanded=False):
-                st.markdown(f"<span class='badge badge-reincidente'>REINCIDENTE</span> &nbsp; Origens: {', '.join(item['lotes'])}", unsafe_allow_html=True)
-                cols = st.columns(min(len(item["fotos"]), 6))
-                for idx, foto_nome in enumerate(item["fotos"][:6]):
-                    with cols[idx]:
-                        st.image(os.path.join(item["caminho"], foto_nome), use_container_width=True, caption=foto_nome)
-                if len(item["fotos"]) > 6:
-                    st.caption(f"+ {len(item['fotos']) - 6} foto(s) ocultada(s) para otimizar desempenho.")
-    else:
-        st.warning("Diretório de armazenamento não encontrado.")
+        st.write("")
+        col_vazia1, col_botao, col_vazia2 = st.columns([1, 2, 1])
+        with col_botao:
+            st.button(
+                "⬇️ CARREGAR MAIS RESULTADOS", 
+                on_click=carregar_mais_reincidentes,
+                type="primary",
+                use_container_width=True
+            )
 
 def tab_busca(confianca_minima, tolerancia_match, tamanho_min_face, pasta_destino):
     st.subheader("Busca Biométrica Avançada")
@@ -183,40 +207,49 @@ def tab_busca(confianca_minima, tolerancia_match, tamanho_min_face, pasta_destin
             if app_arcface:
                 faces = app_arcface.get(img_bgr)
                 faces_validas = [f for f in faces if min(f.bbox[2]-f.bbox[0], f.bbox[3]-f.bbox[1]) >= tamanho_min_face]
+                
                 if faces_validas:
                     for face in faces_validas:
                         resultados = buscar_historico_completo_por_vetor(face.embedding.astype(np.float32), limite_distancia=tolerancia_match)
+                        
                         if resultados:
                             st.success(f"{len(resultados)} correspondência(s) encontrada(s)!")
+                            
                             for res in resultados:
                                 acc = max(0, (1 - res['distancia']) * 100)
                                 ind_id = res['individuo_id']
                                 
-                                pasta_ind = os.path.join(pasta_destino, ind_id)
+                                ocorrencias = res.get('ocorrencias', [])
                                 foto_referencia = None
                                 det_origem = "Desconhecida"
                                 
-                                if os.path.exists(pasta_ind):
-                                    fotos_banco = sorted([f for f in os.listdir(pasta_ind) if f.lower().endswith(('.png', '.jpg', '.jpeg'))])
-                                    if fotos_banco:
-                                        foto_referencia = os.path.join(pasta_ind, fotos_banco[0])
-                                        det_origem = fotos_banco[0]
+                                if ocorrencias:
+                                    primeira_ocorrencia = ocorrencias[0]
+                                    foto_referencia = primeira_ocorrencia.get('caminho_crop')
+                                    det_origem = primeira_ocorrencia.get('lote')
 
                                 with st.container():
                                     st.markdown(f"""<div class="result-card">""", unsafe_allow_html=True)
                                     col_m1, col_m2 = st.columns([1, 4])
+                                    
                                     with col_m1:
                                         if foto_referencia and os.path.exists(foto_referencia):
                                             st.image(foto_referencia, use_container_width=True)
                                         else:
-                                            st.info("Sem foto.")
+                                            st.error("Foto indisponível.")
+                                            
                                     with col_m2:
                                         st.markdown(f"""
                                         <h4 style="margin:0; color:#60a5fa;">ID Localizado: {ind_id}</h4>
                                         <p style="margin:5px 0 0 0;">Acurácia: <b style="color:#10b981;">{acc:.2f}%</b> | Distância: {res['distancia']:.4f}</p>
-                                        <p style="margin:5px 0 0 0; font-size:0.85rem; color:#94a3b8;"><b>Origem Extraída:</b> {det_origem}</p>
-                                        <p style="margin:2px 0 0 0; font-size:0.85rem; color:#94a3b8;"><b>Caminho no Banco:</b> {pasta_ind}</p>
+                                        <p style="margin:5px 0 0 0; font-size:0.85rem; color:#94a3b8;"><b>Origem Extraída (Lote):</b> {det_origem}</p>
+                                        <p style="margin:2px 0 0 0; font-size:0.85rem; color:#94a3b8;"><b>Caminho Físico:</b> {foto_referencia}</p>
                                         """, unsafe_allow_html=True)
+                                        
+                                        if len(ocorrencias) > 1:
+                                            lotes_extras = list(set([oc['lote'] for oc in ocorrencias]))
+                                            st.markdown(f"<p style='margin:5px 0 0 0; font-size:0.85rem; color:#f59e0b;'>⚠️ Esta pessoa aparece em {len(lotes_extras)} lote(s) diferentes!</p>", unsafe_allow_html=True)
+                                            
                                     st.markdown("</div>", unsafe_allow_html=True)
                         else:
                             st.info("Nenhuma correspondência encontrada com os parâmetros de tolerância atuais.")
@@ -286,7 +319,7 @@ def carregar_painel():
     with a1:
         tab_processamento(pasta_origem, pasta_destino, tolerancia_match, tamanho_min_face, confianca_minima)
     with a2:
-        tab_auditoria(pasta_destino)
+        tab_auditoria()
     with a3:
         tab_busca(confianca_minima, tolerancia_match, tamanho_min_face, pasta_destino)
     with a4:

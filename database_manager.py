@@ -66,7 +66,7 @@ def resetar_banco_dados():
     conn.close()
     return True
 
-def buscar_similar(vetor_novo, limite_distancia=0.50):
+def buscar_similar(vetor_novo, limite_distancia=0.40):
     conn = conectar_banco()
     cursor = conn.cursor()
     vetor_arr = np.array(vetor_novo, dtype=np.float32)
@@ -272,6 +272,56 @@ def cancelar_tarefas_pendentes():
     finally:
         cursor.close()
         conn.close()
+
+def obter_reincidentes_banco():
+    conn = conectar_banco()
+    cursor = conn.cursor()
+    try:
+        sql = """
+            SELECT individuo_id 
+            FROM ocorrencias 
+            GROUP BY individuo_id 
+            HAVING COUNT(DISTINCT id_extracao) > 1;
+        """
+        cursor.execute(sql)
+        suspeitos_ids = [linha[0] for linha in cursor.fetchall()]
+
+        reincidentes = []
+        for ind_id in suspeitos_ids:
+            sql_fotos = """
+                SELECT id_extracao, caminho_crop 
+                FROM ocorrencias 
+                WHERE individuo_id = %s 
+                ORDER BY data_ocorrencia DESC;
+            """
+            cursor.execute(sql_fotos, (ind_id,))
+            ocorrencias = cursor.fetchall()
+
+            lotes_unicos = list(set([oc[0] for oc in ocorrencias]))
+            fotos_paths = [oc[1] for oc in ocorrencias if oc[1]]
+
+            reincidentes.append({
+                "id": str(ind_id),
+                "lotes": lotes_unicos,
+                "fotos": fotos_paths
+            })
+            
+        return reincidentes
+    finally:
+        cursor.close()
+        conn.close()
+
+def atualizar_caminho_crop_ocorrencia(hash_foto, caminho_real_crop):
+    conn = conectar_banco()
+    cursor = conn.cursor()
+    try:
+        sql = "UPDATE ocorrencias SET caminho_crop = %s WHERE hash_sha256 = %s;"
+        cursor.execute(sql, (caminho_real_crop, hash_foto))
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
 
 if __name__ == "__main__":
     inicializar_banco()

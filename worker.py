@@ -5,7 +5,7 @@ import hashlib
 from celery import Celery
 from insightface.app import FaceAnalysis
 from ultralytics import YOLO
-from database_manager import atualizar_status_tarefa, registrar_face
+from database_manager import atualizar_status_tarefa, registrar_face, atualizar_caminho_crop_ocorrencia
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
@@ -85,8 +85,10 @@ def extrair_faces_tarefa(self, tarefa_id, id_extracao, caminho_fisico, pasta_des
 
         pasta_confianca = os.path.join(pasta_destino, "_descartados_confianca")
         pasta_tamanho = os.path.join(pasta_destino, "_descartados_tamanho")
+        pasta_sem_rosto = os.path.join(pasta_destino, "_descartados_sem_rosto")
         os.makedirs(pasta_confianca, exist_ok=True)
         os.makedirs(pasta_tamanho, exist_ok=True)
+        os.makedirs(pasta_sem_rosto, exist_ok=True)
 
         nome_arquivo_original = os.path.basename(caminho_fisico)
         
@@ -148,25 +150,29 @@ def extrair_faces_tarefa(self, tarefa_id, id_extracao, caminho_fisico, pasta_des
             faces_validas += 1
             vetor_512d = item["embedding"]
             hash_face = hashlib.sha256(f"{hash_base}_face_{idx}".encode()).hexdigest()
-            caminho_crop_rel = f"crop_virtual_{id_extracao}_{idx}.jpg"
             
             status, ind_id, _ = registrar_face(
                 vetor_512d=vetor_512d,
                 hash_foto=hash_face,
                 id_extracao=id_extracao,
                 caminho_original=caminho_fisico,
-                caminho_crop=caminho_crop_rel,
+                caminho_crop="CAMINHO_PENDENTE",
                 limite_distancia=tolerancia_match,
             )
             
             pasta_suspeito = os.path.join(pasta_destino, str(ind_id))
             os.makedirs(pasta_suspeito, exist_ok=True)
-            cv2.imwrite(
-                os.path.join(pasta_suspeito, f"celular_{id_extracao}_face_{idx}.jpg"),
-                img_bgr[y1:y2, x1:x2],
-            )
+            
+            nome_final_crop = f"celular_{id_extracao}_face_{idx}_{nome_arquivo_original}"
+            caminho_final_absoluto = os.path.join(pasta_suspeito, nome_final_crop)
+            
+            cv2.imwrite(caminho_final_absoluto, img_bgr[y1:y2, x1:x2])
 
+            atualizar_caminho_crop_ocorrencia(hash_face, caminho_final_absoluto)
         if faces_validas == 0:
+            caminho_sr = os.path.join(pasta_sem_rosto, nome_arquivo_original)
+            cv2.imwrite(caminho_sr, img_bgr)
+            
             atualizar_status_tarefa(tarefa_id, "SEM_ROSTO")
             return "SEM_ROSTO_VALIDO"
 
