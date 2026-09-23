@@ -36,6 +36,26 @@ st.markdown("""
     .badge { padding: 5px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: bold; }
     .badge-reincidente { background-color: #dc2626; color: #ffffff; }
     .result-card { background-color: #1e293b; padding: 20px; border-radius: 10px; border: 1px solid #3b82f6; margin-bottom: 20px; }
+    
+    div[data-baseweb="tab-list"] {
+        justify-content: flex-start !important;
+        gap: 16px !important;
+        margin-bottom: 25px !important;
+    }
+    button[data-baseweb="tab"] {
+        font-size: 1.25rem !important;
+        font-weight: 700 !important;
+        padding: 14px 28px !important;
+        border-radius: 8px 8px 0px 0px !important;
+        background-color: #1e293b !important;
+        color: #94a3b8 !important;
+        border: 1px solid #334155 !important;
+    }
+    button[aria-selected="true"] {
+        background-color: #2563eb !important;
+        color: #ffffff !important;
+        border-color: #3b82f6 !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -134,7 +154,9 @@ def tab_auditoria():
     def carregar_mais_reincidentes():
         st.session_state.limite_auditoria += 25
 
-    termo_busca = st.text_input("Filtrar por ID ou Lote de Reincidente:", value="", key="busca_auditoria").strip().lower()
+    col_f, col_v = st.columns([2, 2])
+    with col_f:
+        termo_busca = st.text_input("Filtrar por ID ou Lote de Reincidente:", value="", key="busca_auditoria").strip().lower()
     
     reincidentes_banco = obter_reincidentes_banco()
     
@@ -187,7 +209,9 @@ def tab_busca(confianca_minima, tolerancia_match, tamanho_min_face, pasta_destin
             return ".../" + "/".join(parts[idx:])
         return ".../" + "/".join(parts[-3:]) if len(parts) > 3 else c
 
-    uploaded_file = st.file_uploader("Enviar Imagem de Referência", type=["jpg", "jpeg", "png"], key="up_ref")
+    col_up, col_v = st.columns([2, 2])
+    with col_up:
+        uploaded_file = st.file_uploader("Enviar Imagem de Referência", type=["jpg", "jpeg", "png"], key="up_ref")
     
     if uploaded_file is not None:
         nparr = np.frombuffer(uploaded_file.read(), np.uint8)
@@ -262,46 +286,84 @@ def tab_busca(confianca_minima, tolerancia_match, tamanho_min_face, pasta_destin
 def tab_curadoria(pasta_destino):
     st.subheader("Curadoria e Análise de Descartes")
     
-    st.markdown("##### Galeria de Imagens Descartadas (Sem Rosto ou Tamanho Insuficiente)")
-    p_descartes = os.path.join(pasta_destino, "_descartados_sem_rosto")
+    cur1, cur2 = st.tabs(["📏 Tamanho Insuficiente", "📉 Baixa Confiança / Sem Rosto"])
     
-    if 'limite_descartes' not in st.session_state:
-        st.session_state.limite_descartes = 24
+    with cur1:
+        p_tam = os.path.join(pasta_destino, "_descartados_tamanho")
+        if 'limite_descartes_tam' not in st.session_state:
+            st.session_state.limite_descartes_tam = 24
 
-    def carregar_mais_descartes():
-        st.session_state.limite_descartes += 24
+        def carregar_mais_tam():
+            st.session_state.limite_descartes_tam += 24
 
-    if os.path.exists(p_descartes):
-        todas_fotos = [f for f in os.listdir(p_descartes) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-        total_descartes = len(todas_fotos)
-        
-        if total_descartes > 0:
-            st.markdown(f"**Total de imagens descartadas:** {total_descartes}")
-            st.write("")
+        if os.path.exists(p_tam):
+            fotos_tam = [f for f in os.listdir(p_tam) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+            total_tam = len(fotos_tam)
             
-            fotos_exibidas = todas_fotos[:st.session_state.limite_descartes]
-            cols = st.columns(8)
-            
-            for i, f in enumerate(fotos_exibidas):
-                with cols[i % 8]:
-                    caminho_foto = os.path.join(p_descartes, f)
-                    st.image(caminho_foto, use_container_width=True)
-            
-            if st.session_state.limite_descartes < total_descartes:
+            if total_tam > 0:
+                st.markdown(f"**Total descartado por tamanho: {total_tam}**")
                 st.write("")
-                col_vazia1, col_botao, col_vazia2 = st.columns([1.5, 1, 1.5])
-                with col_botao:
-                    st.button(
-                        "⬇️ CARREGAR MAIS DESCARTES", 
-                        on_click=carregar_mais_descartes,
-                        key="btn_mais_descartes",
-                        type="primary",
-                        use_container_width=True
-                    )
+                
+                cols = st.columns(8)
+                for i, f in enumerate(fotos_tam[:st.session_state.limite_descartes_tam]):
+                    with cols[i % 8]:
+                        st.image(os.path.join(p_tam, f), use_container_width=True)
+                
+                if st.session_state.limite_descartes_tam < total_tam:
+                    st.write("")
+                    col_v1, col_b, col_v2 = st.columns([1.5, 1, 1.5])
+                    with col_b:
+                        st.button(
+                            "⬇️ CARREGAR MAIS", 
+                            on_click=carregar_mais_tam,
+                            key="btn_descartes_tam",
+                            type="primary",
+                            use_container_width=True
+                        )
+            else:
+                st.info("A pasta de descartes por tamanho está vazia.")
         else:
-            st.info("A pasta de descartes está vazia no momento.")
-    else:
-        st.info("A pasta de descartes ainda não foi criada pelo sistema.")
+            st.info("A pasta de descartes por tamanho ainda não foi criada.")
+
+    with cur2:
+        p_conf = os.path.join(pasta_destino, "_descartados_sem_rosto")
+        p_conf_alt = os.path.join(pasta_destino, "_descartados_confianca")
+        p_alvo = p_conf if os.path.exists(p_conf) else p_conf_alt
+
+        if 'limite_descartes_conf' not in st.session_state:
+            st.session_state.limite_descartes_conf = 24
+
+        def carregar_mais_conf():
+            st.session_state.limite_descartes_conf += 24
+
+        if os.path.exists(p_alvo):
+            fotos_conf = [f for f in os.listdir(p_alvo) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+            total_conf = len(fotos_conf)
+            
+            if total_conf > 0:
+                st.markdown(f"**Total descartado por confiança/sem rosto: {total_conf}**")
+                st.write("")
+                
+                cols = st.columns(8)
+                for i, f in enumerate(fotos_conf[:st.session_state.limite_descartes_conf]):
+                    with cols[i % 8]:
+                        st.image(os.path.join(p_alvo, f), use_container_width=True)
+                
+                if st.session_state.limite_descartes_conf < total_conf:
+                    st.write("")
+                    col_v1, col_b, col_v2 = st.columns([1.5, 1, 1.5])
+                    with col_b:
+                        st.button(
+                            "⬇️ CARREGAR MAIS", 
+                            on_click=carregar_mais_conf,
+                            key="btn_descartes_conf",
+                            type="primary",
+                            use_container_width=True
+                        )
+            else:
+                st.info("A pasta de descartes por confiança/sem rosto está vazia.")
+        else:
+            st.info("A pasta de descartes por confiança/sem rosto ainda não foi criada.")
 
 def carregar_painel():
     col_header, col_logo = st.columns([7.5, 2.5])
@@ -339,7 +401,7 @@ def carregar_painel():
     st.sidebar.markdown("### ⚙️ Padrões Forenses")
     
     confianca_minima = 0.25
-    tolerancia_match = 0.60
+    tolerancia_match = 0.38
     tamanho_min_face = 40
     
     st.sidebar.info(f"""

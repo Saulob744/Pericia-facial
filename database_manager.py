@@ -66,7 +66,7 @@ def resetar_banco_dados():
     conn.close()
     return True
 
-def buscar_similar(vetor_novo, limite_distancia=0.40):
+def buscar_similar(vetor_novo, limite_distancia=0.38):
     conn = conectar_banco()
     cursor = conn.cursor()
     vetor_arr = np.array(vetor_novo, dtype=np.float32)
@@ -128,7 +128,7 @@ def buscar_historico_completo_por_vetor(vetor_novo, limite_distancia=0.50):
     conn.close()
     return resultados
 
-def registrar_face(vetor_512d, hash_foto, id_extracao, caminho_original, caminho_crop, limite_distancia=0.45):
+def registrar_face(vetor_512d, hash_foto, id_extracao, caminho_original, caminho_crop, limite_distancia=0.38):
     conn = conectar_banco()
     cursor = conn.cursor()
     historico_lotes = []

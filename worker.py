@@ -100,7 +100,15 @@ def extrair_faces_tarefa(self, tarefa_id, id_extracao, caminho_fisico, pasta_des
             for r in results:
                 for det in r.boxes:
                     x1_y, y1_y, x2_y, y2_y = map(int, det.xyxy[0].tolist())
-                    crop_pessoa = img_bgr[max(0, y1_y):y2_y, max(0, x1_y):x2_y]
+                    h_c, w_c = y2_y - y1_y, x2_y - x1_y
+                    pad_x, pad_y = int(w_c * 0.15), int(h_c * 0.15)
+                    
+                    ay1 = max(0, y1_y - pad_y)
+                    ay2 = min(img_bgr.shape[0], y2_y + pad_y)
+                    ax1 = max(0, x1_y - pad_x)
+                    ax2 = min(img_bgr.shape[1], x2_y + pad_x)
+                    
+                    crop_pessoa = img_bgr[ay1:ay2, ax1:ax2]
                     
                     if crop_pessoa.size > 0:
                         extra = motor_arcface.get(crop_pessoa)
