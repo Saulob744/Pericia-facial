@@ -128,7 +128,7 @@ def buscar_historico_completo_por_vetor(vetor_novo, limite_distancia=0.50):
     conn.close()
     return resultados
 
-def registrar_face(vetor_512d, hash_foto, id_extracao, caminho_original, caminho_crop, limite_distancia=0.50):
+def registrar_face(vetor_512d, hash_foto, id_extracao, caminho_original, caminho_crop, limite_distancia=0.45):
     conn = conectar_banco()
     cursor = conn.cursor()
     historico_lotes = []
@@ -140,19 +140,13 @@ def registrar_face(vetor_512d, hash_foto, id_extracao, caminho_original, caminho
         match = buscar_similar(vetor_arr, limite_distancia=limite_distancia)
         if match:
             individuo_id = match[0]
+            distancia = match[1]
+            
+            if distancia < 0.15:
+                return "DUPLICADO", None, []
+
             status = "REINCIDENTE"
-            try:
-                cursor.execute("SELECT embedding FROM individuos WHERE id = %s;", (individuo_id,))
-                row_emb = cursor.fetchone()
-                if row_emb and row_emb[0] is not None:
-                    v_old = np.array(row_emb[0], dtype=np.float32)
-                    v_blend = 0.80 * v_old + 0.20 * vetor_arr
-                    norm_blend = np.linalg.norm(v_blend)
-                    if norm_blend > 0:
-                        v_blend = v_blend / norm_blend
-                    cursor.execute("UPDATE individuos SET embedding = %s WHERE id = %s;", (v_blend, individuo_id))
-            except Exception:
-                pass
+
             cursor.execute("SELECT DISTINCT id_extracao FROM ocorrencias WHERE individuo_id = %s;", (individuo_id,))
             historico_lotes = [linha[0] for linha in cursor.fetchall()]
         else:
@@ -160,6 +154,7 @@ def registrar_face(vetor_512d, hash_foto, id_extracao, caminho_original, caminho
             cursor.execute(sql_novo, (vetor_arr,))
             individuo_id = cursor.fetchone()[0]
             status = "NOVO"
+
         sql_ocorrencia = """
             INSERT INTO ocorrencias (individuo_id, id_extracao, hash_sha256, caminho_arquivo, caminho_crop)
             VALUES (%s, %s, %s, %s, %s);

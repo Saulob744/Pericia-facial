@@ -35,8 +35,7 @@ st.markdown("""
     .metric-lbl { font-size: 0.85rem; color: #cbd5e1 !important; margin-top: 10px; text-transform: uppercase; font-weight: 600; }
     .badge { padding: 5px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: bold; }
     .badge-reincidente { background-color: #dc2626; color: #ffffff; }
-    .result-card { background-color: #1e293b; padding: 15px; border-radius: 8px; border: 1px solid #3b82f6; margin-bottom: 15px; }
-    .logo-container { display: flex; justify-content: flex-end; align-items: center; }
+    .result-card { background-color: #1e293b; padding: 20px; border-radius: 10px; border: 1px solid #3b82f6; margin-bottom: 20px; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -75,37 +74,40 @@ def monitorar_progresso_fragment():
 
 def tab_processamento(pasta_origem, pasta_destino, tolerancia_match, tamanho_min_face, confianca_minima):
     st.subheader("Controle de Fila e Processamento")
-    col_p1, col_p2 = st.columns(2)
+    col_p1, col_p2, col_vazia = st.columns([2, 2, 3])
     with col_p1: 
-        p_origem = st.text_input("Diretório de Origem:", value=pasta_origem, key="cfg_origem")
+        input_origem = st.text_input("Diretório de Origem:", placeholder="[Caminho Padrão Oculto por Segurança] - Digite para alterar", value="")
+        p_origem_real = input_origem.strip() if input_origem.strip() else pasta_origem
+        
     with col_p2: 
-        p_destino = st.text_input("Diretório de Destino:", value=pasta_destino, key="cfg_destino")
+        input_destino = st.text_input("Diretório de Destino:", placeholder="[Caminho Padrão Oculto por Segurança] - Digite para alterar", value="")
+        p_destino_real = input_destino.strip() if input_destino.strip() else pasta_destino
 
     st.write("")
-    col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
+    col_btn1, col_btn2, col_btn3, col_btn4, col_spacer = st.columns([1.5, 1.5, 1.5, 1.5, 4])
 
     with col_btn1:
-        if st.button("📋 Alimentar Fila", use_container_width=True):
-            if not os.path.exists(p_origem):
+        if st.button("Alimentar Fila", use_container_width=True):
+            if not os.path.exists(p_origem_real):
                 st.error("Diretório não localizado.")
             else:
                 with st.spinner("Indexando..."):
                     from maestro_scanner import mapear_lotes_de_extracao
-                    total = mapear_lotes_de_extracao(p_origem)
+                    total = mapear_lotes_de_extracao(p_origem_real)
                 st.success(f"{total} registros inseridos.")
 
     with col_btn2:
-        if st.button("▶️ Iniciar Processamento", type="primary", use_container_width=True):
+        if st.button("▶️ Iniciar", type="primary", use_container_width=True):
             with st.spinner("Despachando..."):
                 tarefas = obter_todas_tarefas_pendentes()
                 for t in tarefas:
                     tarefa_id, id_extracao, caminho_relativo = t
-                    caminho_fisico = os.path.join(p_origem, caminho_relativo)
-                    extrair_faces_tarefa.delay(tarefa_id, id_extracao, caminho_fisico, p_destino, tolerancia_match, tamanho_min_face, confianca_minima)
+                    caminho_fisico = os.path.join(p_origem_real, caminho_relativo)
+                    extrair_faces_tarefa.delay(tarefa_id, id_extracao, caminho_fisico, p_destino_real, tolerancia_match, tamanho_min_face, confianca_minima)
             st.success(f"{len(tarefas)} tarefas enviadas!")
 
     with col_btn3:
-        if st.button("🛑 Parar Processamento", use_container_width=True):
+        if st.button("🛑 Parar", use_container_width=True):
             with st.spinner("Parando..."):
                 from worker import app 
                 app.control.purge()
@@ -114,11 +116,11 @@ def tab_processamento(pasta_origem, pasta_destino, tolerancia_match, tamanho_min
             st.warning("Interrompido!")
 
     with col_btn4:
-        if st.button("🔄 Resetar Banco de Dados", use_container_width=True):
+        if st.button("🔄 Resetar Banco", use_container_width=True):
             if resetar_banco_dados():
-                st.success("Banco de dados resetado com sucesso.")
+                st.success("Banco resetado com sucesso.")
             else:
-                st.error("Falha ao resetar o banco de dados.")
+                st.error("Falha ao resetar banco.")
 
     st.divider()
     monitorar_progresso_fragment()
@@ -146,38 +148,24 @@ def tab_auditoria():
     for item in reincidentes[:st.session_state.limite_auditoria]:
         with st.expander(f"ID: {item['id']} | {len(item['fotos'])} Aparições distintas", expanded=False):
             st.markdown(f"<span class='badge badge-reincidente'>REINCIDENTE</span> &nbsp; Origens: {', '.join(item['lotes'])}", unsafe_allow_html=True)
+            st.write("")
             
-            cols = st.columns(min(len(item["fotos"]), 6))
-            for idx, foto_path in enumerate(item["fotos"][:6]):
+            qtd_miniaturas = 12
+            cols = st.columns(qtd_miniaturas)
+            
+            for idx, foto_path in enumerate(item["fotos"][:qtd_miniaturas]):
                 with cols[idx]:
-                    nome_arquivo = os.path.basename(foto_path)
-                    
                     if os.path.exists(foto_path):
-                        st.image(foto_path, use_container_width=True, caption=nome_arquivo)
+                        st.image(foto_path, use_container_width=True)
                     else:
-                        st.error("Foto movida/apagada")
+                        st.error("X")
                         
-            if len(item["fotos"]) > 6:
-                st.caption(f"+ {len(item['fotos']) - 6} foto(s) ocultada(s) para otimizar desempenho.")
+            if len(item["fotos"]) > qtd_miniaturas:
+                st.caption(f"+ {len(item['fotos']) - qtd_miniaturas} foto(s) ocultada(s) para otimizar desempenho.")
     
     if st.session_state.limite_auditoria < len(reincidentes):
-        st.markdown("""
-            <style>
-            div[data-testid="stButton"] button[kind="primary"] {
-                background-color: #f8fafc !important;
-                color: #0f172a !important;
-                font-weight: 800 !important;
-                border: 2px solid #3b82f6 !important;
-            }
-            div[data-testid="stButton"] button[kind="primary"]:hover {
-                background-color: #cbd5e1 !important;
-                border-color: #2563eb !important;
-            }
-            </style>
-        """, unsafe_allow_html=True)
-        
         st.write("")
-        col_vazia1, col_botao, col_vazia2 = st.columns([1, 2, 1])
+        col_vazia1, col_botao, col_vazia2 = st.columns([1.5, 1, 1.5])
         with col_botao:
             st.button(
                 "⬇️ CARREGAR MAIS RESULTADOS", 
@@ -188,106 +176,135 @@ def tab_auditoria():
 
 def tab_busca(confianca_minima, tolerancia_match, tamanho_min_face, pasta_destino):
     st.subheader("Busca Biométrica Avançada")
-    col_ref, col_res = st.columns([1, 2])
     
-    with col_ref:
-        uploaded_file = st.file_uploader("Enviar Imagem de Referência", type=["jpg", "jpeg", "png"], key="up_ref")
-        img_bgr = None
-        if uploaded_file is not None:
-            nparr = np.frombuffer(uploaded_file.read(), np.uint8)
-            img_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            st.image(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB), caption="Alvo da Busca", use_container_width=True)
-            executar = st.button("Executar Varredura", type="primary", use_container_width=True)
-        else:
-            executar = False
+    def formatar_caminho_seguro(caminho):
+        if not caminho: return "Desconhecido"
+        c = caminho.replace('\\', '/')
+        parts = c.split('/')
+        parts_lower = [p.lower() for p in parts]
+        if 'downloads' in parts_lower:
+            idx = parts_lower.index('downloads')
+            return ".../" + "/".join(parts[idx:])
+        return ".../" + "/".join(parts[-3:]) if len(parts) > 3 else c
 
-    with col_res:
-        if executar and img_bgr is not None:
-            app_arcface = carregar_modelo_arcface(confianca_minima)
-            if app_arcface:
-                faces = app_arcface.get(img_bgr)
-                faces_validas = [f for f in faces if min(f.bbox[2]-f.bbox[0], f.bbox[3]-f.bbox[1]) >= tamanho_min_face]
-                
-                if faces_validas:
-                    for face in faces_validas:
-                        resultados = buscar_historico_completo_por_vetor(face.embedding.astype(np.float32), limite_distancia=tolerancia_match)
-                        
-                        if resultados:
-                            st.success(f"{len(resultados)} correspondência(s) encontrada(s)!")
+    uploaded_file = st.file_uploader("Enviar Imagem de Referência", type=["jpg", "jpeg", "png"], key="up_ref")
+    
+    if uploaded_file is not None:
+        nparr = np.frombuffer(uploaded_file.read(), np.uint8)
+        img_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        col_esquerda, col_direita = st.columns([1, 2.5])
+        
+        with col_esquerda:
+            st.markdown("##### 🎯 Alvo da Busca")
+            st.image(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB), use_container_width=True)
+            executar = st.button("🔍 Executar Varredura", type="primary", use_container_width=True)
+
+        with col_direita:
+            if executar:
+                st.markdown("##### 🔎 Resultados Encontrados")
+                app_arcface = carregar_modelo_arcface(confianca_minima)
+                if app_arcface:
+                    faces = app_arcface.get(img_bgr)
+                    faces_validas = [f for f in faces if min(f.bbox[2]-f.bbox[0], f.bbox[3]-f.bbox[1]) >= tamanho_min_face]
+                    
+                    if faces_validas:
+                        for face in faces_validas:
+                            resultados = buscar_historico_completo_por_vetor(face.embedding.astype(np.float32), limite_distancia=tolerancia_match)
                             
-                            for res in resultados:
-                                acc = max(0, (1 - res['distancia']) * 100)
-                                ind_id = res['individuo_id']
+                            if resultados:
+                                st.success(f"{len(resultados)} correspondência(s) encontrada(s) no banco de dados!")
                                 
-                                ocorrencias = res.get('ocorrencias', [])
-                                foto_referencia = None
-                                det_origem = "Desconhecida"
-                                
-                                if ocorrencias:
-                                    primeira_ocorrencia = ocorrencias[0]
-                                    foto_referencia = primeira_ocorrencia.get('caminho_crop')
-                                    det_origem = primeira_ocorrencia.get('lote')
-
-                                with st.container():
-                                    st.markdown(f"""<div class="result-card">""", unsafe_allow_html=True)
-                                    col_m1, col_m2 = st.columns([1, 4])
+                                for res in resultados:
+                                    acc = max(0, (1 - res['distancia']) * 100)
+                                    ind_id = res['individuo_id']
+                                    ocorrencias = res.get('ocorrencias', [])
                                     
-                                    with col_m1:
-                                        if foto_referencia and os.path.exists(foto_referencia):
-                                            st.image(foto_referencia, use_container_width=True)
-                                        else:
-                                            st.error("Foto indisponível.")
-                                            
-                                    with col_m2:
-                                        st.markdown(f"""
-                                        <h4 style="margin:0; color:#60a5fa;">ID Localizado: {ind_id}</h4>
-                                        <p style="margin:5px 0 0 0;">Acurácia: <b style="color:#10b981;">{acc:.2f}%</b> | Distância: {res['distancia']:.4f}</p>
-                                        <p style="margin:5px 0 0 0; font-size:0.85rem; color:#94a3b8;"><b>Origem Extraída (Lote):</b> {det_origem}</p>
-                                        <p style="margin:2px 0 0 0; font-size:0.85rem; color:#94a3b8;"><b>Caminho Físico:</b> {foto_referencia}</p>
-                                        """, unsafe_allow_html=True)
+                                    st.markdown(f"""
+                                    <div class="result-card">
+                                        <h4 style="margin:0 0 5px 0; color:#60a5fa;">ID Localizado: {ind_id}</h4>
+                                        <p style="margin:0 0 15px 0;">Acurácia Biométrica: <b style="color:#10b981; font-size:1.1rem;">{acc:.2f}%</b> | Distância: {res['distancia']:.4f}</p>
+                                    """, unsafe_allow_html=True)
+                                    
+                                    if ocorrencias:
+                                        lotes_extras = list(set([oc['lote'] for oc in ocorrencias]))
+                                        if len(lotes_extras) > 1:
+                                            st.markdown(f"<p style='margin:0 0 10px 0; font-size:0.9rem; color:#f59e0b;'>⚠️ Detecções em {len(lotes_extras)} lotes distintos de extração.</p>", unsafe_allow_html=True)
                                         
-                                        if len(ocorrencias) > 1:
-                                            lotes_extras = list(set([oc['lote'] for oc in ocorrencias]))
-                                            st.markdown(f"<p style='margin:5px 0 0 0; font-size:0.85rem; color:#f59e0b;'>⚠️ Esta pessoa aparece em {len(lotes_extras)} lote(s) diferentes!</p>", unsafe_allow_html=True)
+                                        thumb_cols = st.columns(6) 
+                                        for idx, oc in enumerate(ocorrencias):
+                                            path_oc = oc.get('caminho_crop')
+                                            path_orig = oc.get('caminho_arquivo', '')
+                                            data_oc = oc.get('data_ocorrencia', '')
                                             
+                                            str_data = data_oc.strftime('%d/%m/%Y %H:%M') if hasattr(data_oc, 'strftime') else str(data_oc).split('.')[0]
+                                            caminho_limpo = formatar_caminho_seguro(path_orig)
+                                            
+                                            if path_oc and os.path.exists(path_oc):
+                                                with thumb_cols[idx % 6]:
+                                                    st.image(path_oc, use_container_width=True)
+                                                    st.markdown(f"""
+                                                    <div style="font-size: 0.75rem; color: #94a3b8; margin-top: 5px; margin-bottom: 15px; word-wrap: break-word; line-height: 1.3;">
+                                                        <b style="color: #cbd5e1;">Lote:</b> {oc.get('lote')}<br>
+                                                        <b style="color: #cbd5e1;">Data:</b> {str_data}<br>
+                                                        <b style="color: #cbd5e1;">Origem:</b> {caminho_limpo}
+                                                    </div>
+                                                    """, unsafe_allow_html=True)
+                                                    
                                     st.markdown("</div>", unsafe_allow_html=True)
-                        else:
-                            st.info("Nenhuma correspondência encontrada com os parâmetros de tolerância atuais.")
-                else:
-                    st.warning("Nenhum rosto válido detectado na imagem referência.")
+                            else:
+                                st.info("Nenhuma correspondência encontrada com os parâmetros de tolerância atuais.")
+                    else:
+                        st.warning("Nenhum rosto válido (ou com tamanho suficiente) detectado na imagem referência.")
+            else:
+                st.info("Clique em 'Executar Varredura' para processar a imagem e buscar no banco de dados.")
 
 def tab_curadoria(pasta_destino):
     st.subheader("Curadoria e Análise de Descartes")
-    col_c1, col_c2 = st.columns(2)
     
-    with col_c1:
-        st.markdown("##### 📉 Descarte por Baixa Confiança")
-        p_conf = os.path.join(pasta_destino, "_descartados_confianca")
-        if os.path.exists(p_conf):
-            fotos = os.listdir(p_conf)[:6]
-            if fotos:
-                grid = st.columns(3)
-                for i, f in enumerate(fotos):
-                    with grid[i % 3]:
-                        st.image(os.path.join(p_conf, f), use_container_width=True)
-            else:
-                st.info("Nenhum registro encontrado.")
-                
-    with col_c2:
-        st.markdown("##### 📏 Descarte por Tamanho Insuficiente")
-        p_tam = os.path.join(pasta_destino, "_descartados_tamanho")
-        if os.path.exists(p_tam):
-            fotos = os.listdir(p_tam)[:6]
-            if fotos:
-                grid = st.columns(3)
-                for i, f in enumerate(fotos):
-                    with grid[i % 3]:
-                        st.image(os.path.join(p_tam, f), use_container_width=True)
-            else:
-                st.info("Nenhum registro encontrado.")
+    st.markdown("##### Galeria de Imagens Descartadas (Sem Rosto ou Tamanho Insuficiente)")
+    p_descartes = os.path.join(pasta_destino, "_descartados_sem_rosto")
+    
+    if 'limite_descartes' not in st.session_state:
+        st.session_state.limite_descartes = 24
+
+    def carregar_mais_descartes():
+        st.session_state.limite_descartes += 24
+
+    if os.path.exists(p_descartes):
+        todas_fotos = [f for f in os.listdir(p_descartes) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        total_descartes = len(todas_fotos)
+        
+        if total_descartes > 0:
+            st.markdown(f"**Total de imagens descartadas:** {total_descartes}")
+            st.write("")
+            
+            fotos_exibidas = todas_fotos[:st.session_state.limite_descartes]
+            cols = st.columns(8)
+            
+            for i, f in enumerate(fotos_exibidas):
+                with cols[i % 8]:
+                    caminho_foto = os.path.join(p_descartes, f)
+                    st.image(caminho_foto, use_container_width=True)
+            
+            if st.session_state.limite_descartes < total_descartes:
+                st.write("")
+                col_vazia1, col_botao, col_vazia2 = st.columns([1.5, 1, 1.5])
+                with col_botao:
+                    st.button(
+                        "⬇️ CARREGAR MAIS DESCARTES", 
+                        on_click=carregar_mais_descartes,
+                        key="btn_mais_descartes",
+                        type="primary",
+                        use_container_width=True
+                    )
+        else:
+            st.info("A pasta de descartes está vazia no momento.")
+    else:
+        st.info("A pasta de descartes ainda não foi criada pelo sistema.")
 
 def carregar_painel():
-    col_header, col_logo = st.columns([8, 1])
+    col_header, col_logo = st.columns([7.5, 2.5])
     
     with col_header:
         st.markdown("""
@@ -298,18 +315,39 @@ def carregar_painel():
         """, unsafe_allow_html=True)
 
     with col_logo:
-        caminho_logo = "29fc63f478b81ace491a329a223c76a6.jpg"
-        if os.path.exists(caminho_logo):
-            st.markdown('<div class="logo-container">', unsafe_allow_html=True)
-            st.image(caminho_logo, width=120)
-            st.markdown('</div>', unsafe_allow_html=True)
+        caminho_logo1 = "29fc63f478b81ace491a329a223c76a6.jpg"
+        caminho_logo2 = "Gemini_Generated_Image_5u7pwj5u7pwj5u7p.jpeg"
+        
+        import base64
+        def obter_base64(caminho):
+            with open(caminho, "rb") as img_file:
+                return base64.b64encode(img_file.read()).decode()
+        html_logos = '<div style="display: flex; justify-content: flex-end; align-items: center; gap: 15px; height: 100%;">'
+        if os.path.exists(caminho_logo1):
+            img1_b64 = obter_base64(caminho_logo1)
+            html_logos += f'<img src="data:image/jpeg;base64,{img1_b64}" style="height: 150px; width: auto; object-fit: contain; border-radius: 8px;">'
+        if os.path.exists(caminho_logo2):
+            img2_b64 = obter_base64(caminho_logo2)
+            html_logos += f'<img src="data:image/jpeg;base64,{img2_b64}" style="height: 150px; width: auto; object-fit: contain; border-radius: 8px;">'
+            
+        html_logos += '</div>'
+        
+        st.markdown(html_logos, unsafe_allow_html=True)
             
     st.markdown("<hr style='margin-top: 0px; margin-bottom: 25px; border: 1px solid #1e293b;'/>", unsafe_allow_html=True)
 
-    st.sidebar.markdown("### ⚙️ Calibração Forense")
-    confianca_minima = st.sidebar.slider("Confiança Mínima", 0.15, 0.40, 0.20, 0.01)
-    tolerancia_match = st.sidebar.slider("Tolerância Match", 0.35, 0.65, 0.45, 0.01)
-    tamanho_min_face = st.sidebar.slider("Tamanho Mínimo", 15, 50, 20, 1)
+    st.sidebar.markdown("### ⚙️ Padrões Forenses")
+    
+    confianca_minima = 0.25
+    tolerancia_match = 0.60
+    tamanho_min_face = 40
+    
+    st.sidebar.info(f"""
+    **Parâmetros travados pelo sistema:**
+    - Confiança de Detecção: **{confianca_minima}**
+    - Tolerância de Biometria: **{tolerancia_match}**
+    - Rosto Mínimo: **{tamanho_min_face}px**
+    """)
     
     pasta_origem = os.getenv("PASTA_ORIGEM", r"C:\Users\saulo.borges\Downloads\facial_teste\entradas_celular")
     pasta_destino = os.getenv("PASTA_DESTINO", r"C:\Users\saulo.borges\Downloads\facial_teste\armazenamento_crops")
