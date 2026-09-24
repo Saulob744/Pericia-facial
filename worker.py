@@ -134,20 +134,33 @@ def extrair_faces_tarefa(self, tarefa_id, id_extracao, caminho_fisico, pasta_des
                     cv2.BORDER_CONSTANT, value=[128, 128, 128]
                 )
                 
-                faces_moldura = motor_arcface.get(img_moldura)
-                for face_m in faces_moldura:
-                    if face_m.det_score >= 0.10:
-                        bbox = face_m.bbox.astype(int)
-                        rx1 = max(0, bbox[0] - pad_w)
-                        ry1 = max(0, bbox[1] - pad_h)
-                        rx2 = min(w_o, bbox[2] - pad_w)
-                        ry2 = min(h_o, bbox[3] - pad_h)
-                        
-                        combined.append({
-                            "bbox": np.array([rx1, ry1, rx2, ry2]),
-                            "embedding": face_m.embedding.astype(np.float32),
-                            "source": "resgate_moldura_artificial"
-                        })
+                variacoes_m = [(img_moldura, False), (cv2.flip(img_moldura, 1), True)]
+                
+                for img_m, foi_espelhada in variacoes_m:
+                    faces_m = motor_arcface.get(img_m)
+                    for face_m in faces_m:
+                        if face_m.det_score >= 0.05:
+                            bbox = face_m.bbox.astype(int)
+                            
+                            if foi_espelhada:
+                                w_m = img_m.shape[1]
+                                bx1, bx2 = w_m - bbox[2], w_m - bbox[0]
+                                by1, by2 = bbox[1], bbox[3]
+                            else:
+                                bx1, by1, bx2, by2 = bbox[0], bbox[1], bbox[2], bbox[3]
+                                
+                            rx1 = max(0, bx1 - pad_w)
+                            ry1 = max(0, by1 - pad_h)
+                            rx2 = min(w_o, bx2 - pad_w)
+                            ry2 = min(h_o, by2 - pad_h)
+                            
+                            combined.append({
+                                "bbox": np.array([rx1, ry1, rx2, ry2]),
+                                "embedding": face_m.embedding.astype(np.float32),
+                                "source": "resgate_moldura_artificial"
+                            })
+                    if combined:
+                        break
             except Exception:
                 pass
 

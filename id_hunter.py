@@ -163,16 +163,8 @@ def tab_processamento(pasta_origem, pasta_destino, tolerancia_match, tamanho_min
     st.divider()
     monitorar_progresso_fragment()
 
-def tab_auditoria():
-    st.subheader("Auditoria de Reincidentes")
-    
-    if 'limite_auditoria' not in st.session_state:
-        st.session_state.limite_auditoria = 25
-
-    col_f, _ = st.columns([2, 2])
-    with col_f:
-        termo_busca = st.text_input("Filtrar por ID ou Lote de Reincidente:", value="", key="busca_auditoria").strip().lower()
-    
+@st.fragment(run_every="5s")
+def renderizar_auditoria_fragment(termo_busca):
     reincidentes_banco = obter_reincidentes_banco()
     
     reincidentes = [
@@ -211,8 +203,21 @@ def tab_auditoria():
                 "⬇️ CARREGAR MAIS RESULTADOS", 
                 on_click=lambda: st.session_state.update(limite_auditoria=st.session_state.limite_auditoria + 25),
                 type="primary",
-                use_container_width=True
+                use_container_width=True,
+                key="btn_carregar_mais_auditoria"
             )
+
+def tab_auditoria():
+    st.subheader("Auditoria de Reincidentes")
+    
+    if 'limite_auditoria' not in st.session_state:
+        st.session_state.limite_auditoria = 25
+
+    col_f, _ = st.columns([2, 2])
+    with col_f:
+        termo_busca = st.text_input("Filtrar por ID ou Lote de Reincidente:", value="", key="busca_auditoria").strip().lower()
+
+    renderizar_auditoria_fragment(termo_busca)
 
 def tab_busca(confianca_minima, tolerancia_match, tamanho_min_face, pasta_destino):
     st.subheader("Busca Biométrica Avançada")
@@ -295,6 +300,7 @@ def tab_busca(confianca_minima, tolerancia_match, tamanho_min_face, pasta_destin
             elif not executar:
                 st.info("Clique em 'Executar Varredura' para processar a imagem e buscar no banco de dados.")
 
+@st.fragment(run_every="5s")
 def renderizar_galeria_descartes(pasta, chave_sessao, key_prefix):
     extensoes = ('.png', '.jpg', '.jpeg', '.bmp', '.webp', '.heic', '.heif')
     if chave_sessao not in st.session_state:
@@ -381,9 +387,9 @@ def carregar_painel():
 
     st.sidebar.markdown("### ⚙️ Padrões Forenses")
     
-    confianca_minima = 0.20
-    tolerancia_match = 0.50
-    tamanho_min_face = 30
+    confianca_minima = 0.35
+    tolerancia_match = 0.45
+    tamanho_min_face = 50
     
     st.sidebar.info(f"""
     **Parâmetros travados pelo sistema:**
