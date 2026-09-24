@@ -6,6 +6,7 @@ from celery import Celery
 from insightface.app import FaceAnalysis
 from ultralytics import YOLO
 from database_manager import atualizar_status_tarefa, registrar_face, atualizar_caminho_crop_ocorrencia
+from PIL import Image, ImageOps
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
@@ -16,9 +17,9 @@ app = Celery(
 )
 
 motor_arcface = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
-motor_arcface.prepare(ctx_id=0, det_size=(640, 640), det_thresh=0.15)
+motor_arcface.prepare(ctx_id=0, det_size=(640, 640), det_thresh=0.10)
 
-yolo_model = YOLO(r"C:\Users\saulo.borges\Downloads\facial-cientifica\yolov8n.pt")
+yolo_model = YOLO("yolov8n-face.pt")
 
 def _iou(box_a, box_b):
     x1 = max(box_a[0], box_b[0])
@@ -48,16 +49,7 @@ def _dedup_por_embedding(detections, limite_distancia=0.15):
             filtrado.append(det)
     return filtrado
 
-def _triagem_semantica(img_bgr):
-    results = yolo_model(img_bgr)
-    boxes = []
-    for r in results:
-        for det in r.boxes:
-            x1, y1, x2, y2 = map(int, det.xyxy[0].tolist())
-            boxes.append((x1, y1, x2, y2))
-    return boxes
-
-def _dedup_detections(detections, iou_thr=0.5):
+def _dedup_detections(detections, iou_thr=0.4):
     filtered = []
     for det in detections:
         if not any(_iou(det["bbox"], kept["bbox"]) > iou_thr for kept in filtered):
@@ -73,7 +65,13 @@ def extrair_faces_tarefa(self, tarefa_id, id_extracao, caminho_fisico, pasta_des
                 hasher.update(chunk)
         hash_base = hasher.hexdigest()
 
-        img_bgr = cv2.imread(caminho_fisico)
+        try:
+            pil_img = Image.open(caminho_fisico)
+            pil_img = ImageOps.exif_transpose(pil_img)
+            img_bgr = cv2.cvtColor(np.array(pil_img.convert('RGB')), cv2.COLOR_RGB2BGR)
+        except Exception:
+            img_bgr = cv2.imread(caminho_fisico)
+
         if img_bgr is None:
             atualizar_status_tarefa(tarefa_id, "FALHA")
             return f"FALHA: {caminho_fisico}"
@@ -83,10 +81,11 @@ def extrair_faces_tarefa(self, tarefa_id, id_extracao, caminho_fisico, pasta_des
         nome_arquivo_original = os.path.basename(caminho_fisico)
 
         combined = []
+        limiar_corte = min(float(confianca_minima), 0.25)
 
         faces_arc = motor_arcface.get(img_bgr)
         for idx, face in enumerate(faces_arc):
-            if face.det_score >= confianca_minima:
+            if face.det_score >= limiar_corte:
                 bbox = face.bbox.astype(int)
                 x1, y1, x2, y2 = max(0, bbox[0]), max(0, bbox[1]), bbox[2], bbox[3]
                 combined.append({
@@ -96,12 +95,13 @@ def extrair_faces_tarefa(self, tarefa_id, id_extracao, caminho_fisico, pasta_des
                 })
 
         if not combined:
-            results = yolo_model(img_bgr, verbose=False, classes=[0])
+            results = yolo_model(img_bgr, verbose=False, conf=0.20)
             for r in results:
                 for det in r.boxes:
                     x1_y, y1_y, x2_y, y2_y = map(int, det.xyxy[0].tolist())
                     h_c, w_c = y2_y - y1_y, x2_y - x1_y
-                    pad_x, pad_y = int(w_c * 0.15), int(h_c * 0.15)
+                    
+                    pad_x, pad_y = int(w_c * 0.50), int(h_c * 0.50)
                     
                     ay1 = max(0, y1_y - pad_y)
                     ay2 = min(img_bgr.shape[0], y2_y + pad_y)
@@ -114,16 +114,43 @@ def extrair_faces_tarefa(self, tarefa_id, id_extracao, caminho_fisico, pasta_des
                         extra = motor_arcface.get(crop_pessoa)
                         if extra:
                             for face_ex in extra:
-                                if face_ex.det_score >= (confianca_minima - 0.10):
-                                    fx1, fy1, fx2, fy2 = face_ex.bbox.astype(int)
-                                    abs_x1, abs_y1 = x1_y + max(0, fx1), y1_y + max(0, fy1)
-                                    abs_x2, abs_y2 = x1_y + max(0, fx2), y1_y + max(0, fy2)
-                                    
-                                    combined.append({
-                                        "bbox": np.array([abs_x1, abs_y1, abs_x2, abs_y2]),
-                                        "embedding": face_ex.embedding.astype(np.float32),
-                                        "source": "yolo_arcface"
-                                    })
+                                fx1, fy1, fx2, fy2 = face_ex.bbox.astype(int)
+                                abs_x1, abs_y1 = ax1 + max(0, fx1), ay1 + max(0, fy1)
+                                abs_x2, abs_y2 = ax1 + max(0, fx2), ay1 + max(0, fy2)
+                                
+                                combined.append({
+                                    "bbox": np.array([abs_x1, abs_y1, abs_x2, abs_y2]),
+                                    "embedding": face_ex.embedding.astype(np.float32),
+                                    "source": "yolo_arcface"
+                                })
+
+        if not combined:
+            try:
+                h_o, w_o = img_bgr.shape[:2]
+                pad_h, pad_w = int(h_o * 0.35), int(w_o * 0.35)
+                
+                img_moldura = cv2.copyMakeBorder(
+                    img_bgr, pad_h, pad_h, pad_w, pad_w, 
+                    cv2.BORDER_CONSTANT, value=[128, 128, 128]
+                )
+                
+                faces_moldura = motor_arcface.get(img_moldura)
+                for face_m in faces_moldura:
+                    if face_m.det_score >= 0.10:
+                        bbox = face_m.bbox.astype(int)
+                        rx1 = max(0, bbox[0] - pad_w)
+                        ry1 = max(0, bbox[1] - pad_h)
+                        rx2 = min(w_o, bbox[2] - pad_w)
+                        ry2 = min(h_o, bbox[3] - pad_h)
+                        
+                        combined.append({
+                            "bbox": np.array([rx1, ry1, rx2, ry2]),
+                            "embedding": face_m.embedding.astype(np.float32),
+                            "source": "resgate_moldura_artificial"
+                        })
+            except Exception:
+                pass
+
         if not combined:
             try:
                 img_yuv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2YUV)
@@ -133,20 +160,34 @@ def extrair_faces_tarefa(self, tarefa_id, id_extracao, caminho_fisico, pasta_des
                 alt_orig, larg_orig = img_clara.shape[:2]
                 img_zoom = cv2.resize(img_clara, (larg_orig * 2, alt_orig * 2), interpolation=cv2.INTER_CUBIC)
                 
-                faces_resgate = motor_arcface.get(img_zoom)
-                for face_res in faces_resgate:
-                    if face_res.det_score >= 0.15:
-                        bbox = face_res.bbox.astype(int)
-                        hx = max(0, bbox[0] // 2)
-                        hy = max(0, bbox[1] // 2)
-                        hx2 = bbox[2] // 2
-                        hy2 = bbox[3] // 2
-                        
-                        combined.append({
-                            "bbox": np.array([hx, hy, hx2, hy2]),
-                            "embedding": face_res.embedding.astype(np.float32),
-                            "source": "resgate_optico"
-                        })
+                rotacoes = [
+                    (img_zoom, 0),
+                    (cv2.rotate(img_zoom, cv2.ROTATE_90_CLOCKWISE), 90),
+                    (cv2.rotate(img_zoom, cv2.ROTATE_90_COUNTERCLOCKWISE), 270)
+                ]
+                
+                for img_rot, angulo in rotacoes:
+                    faces_resgate = motor_arcface.get(img_rot)
+                    if faces_resgate:
+                        for face_res in faces_resgate:
+                            if face_res.det_score >= 0.10:
+                                bbox = face_res.bbox.astype(int)
+                                bx1, by1, bx2, by2 = bbox[0] // 2, bbox[1] // 2, bbox[2] // 2, bbox[3] // 2
+                                
+                                if angulo == 90:
+                                    x1, y1, x2, y2 = by1, larg_orig - bx2, by2, larg_orig - bx1
+                                elif angulo == 270:
+                                    x1, y1, x2, y2 = alt_orig - by2, bx1, alt_orig - by1, bx2
+                                else:
+                                    x1, y1, x2, y2 = bx1, by1, bx2, by2
+                                    
+                                combined.append({
+                                    "bbox": np.array([max(0, x1), max(0, y1), max(0, x2), max(0, y2)]),
+                                    "embedding": face_res.embedding.astype(np.float32),
+                                    "source": f"resgate_optico_rot_{angulo}"
+                                })
+                        if combined:
+                            break
             except Exception:
                 pass
 
@@ -160,11 +201,13 @@ def extrair_faces_tarefa(self, tarefa_id, id_extracao, caminho_fisico, pasta_des
         combined = _dedup_por_embedding(combined, limite_distancia=0.10)
 
         faces_validas = 0
+        tamanho_corte_min = min(int(tamanho_min_face), 30)
+
         for idx, item in enumerate(combined, start=1):
             x1, y1, x2, y2 = item["bbox"]
             alt, larg = y2 - y1, x2 - x1
 
-            if alt < tamanho_min_face or larg < tamanho_min_face:
+            if alt < tamanho_corte_min or larg < tamanho_corte_min:
                 continue
 
             faces_validas += 1
@@ -191,6 +234,7 @@ def extrair_faces_tarefa(self, tarefa_id, id_extracao, caminho_fisico, pasta_des
 
             cv2.imwrite(caminho_final_absoluto, img_bgr[y1:y2, x1:x2])
             atualizar_caminho_crop_ocorrencia(hash_face, caminho_final_absoluto)
+
         if faces_validas == 0:
             caminho_sr = os.path.join(pasta_sem_rosto, nome_arquivo_original)
             cv2.imwrite(caminho_sr, img_bgr)

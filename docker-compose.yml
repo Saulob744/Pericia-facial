@@ -1,67 +1,58 @@
 version: "3.8"
 
 services:
-  db_vetorial:
-    image: ankane/pgvector:v0.5.1
-    container_name: idhunter_postgres
+  db:
+    image: ankane/pgvector:latest
+    container_name: pericia_db
+    restart: always
     environment:
-      POSTGRES_USER: perito
-      POSTGRES_PASSWORD: senha_segura_123
-      POSTGRES_DB: idhunter_db
-    ports:
-      - "5454:5432"
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - ./data/postgres_data:/var/lib/postgresql/data
+
+  broker:
+    image: redis:alpine
+    container_name: pericia_redis
     restart: always
 
-  redis_broker:
-    image: redis:7-alpine
-    container_name: idhunter_redis
-    command: redis-server --appendonly yes
-    ports:
-      - "6379:6379"
-    volumes:
-      - redisdata:/data
-    restart: always
-
-  worker_ia:
+  web:
     build: .
-    container_name: idhunter_worker
-    command: celery -A worker worker --loglevel=info --concurrency=4
-    environment:
-      - DB_HOST=db_vetorial
-      - DB_PORT=5432
-      - REDIS_URL=redis://redis_broker:6379/0
-      - PASTA_ORIGEM=/app/dados/entradas
-      - PASTA_DESTINO=/app/dados/crops
-    volumes:
-      - /mnt/storage_pericia/entradas:/app/dados/entradas
-      - /mnt/storage_pericia/crops:/app/dados/crops
-    depends_on:
-      - db_vetorial
-      - redis_broker
+    container_name: pericia_web
     restart: always
-
-  painel_web:
-    build: .
-    container_name: idhunter_streamlit
-    command: streamlit run id_hunter.py --server.port=8501 --server.address=0.0.0.0
-    environment:
-      - DB_HOST=db_vetorial
-      - DB_PORT=5432
-      - REDIS_URL=redis://redis_broker:6379/0
-      - PASTA_ORIGEM=/app/dados/entradas
-      - PASTA_DESTINO=/app/dados/crops
     ports:
-      - "80:8501"
+      - "8501:8501"
     volumes:
-      - /mnt/storage_pericia/entradas:/app/dados/entradas
-      - /mnt/storage_pericia/crops:/app/dados/crops
+      - .:/app
+      - ./data:/app/data
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_HOST=db
+      - REDIS_URL=${REDIS_URL}
+      - PASTA_ORIGEM=${PASTA_ORIGEM}
+      - PASTA_DESTINO=${PASTA_DESTINO}
     depends_on:
-      - db_vetorial
-      - redis_broker
-    restart: always
+      - db
+      - broker
+    command: streamlit run id_hunter.py --server.address 0.0.0.0
 
-volumes:
-  pgdata:
-  redisdata:
+  worker:
+    build: .
+    container_name: pericia_worker
+    restart: always
+    volumes:
+      - .:/app
+      - ./data:/app/data
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_HOST=db
+      - REDIS_URL=${REDIS_URL}
+    depends_on:
+      - db
+      - broker
+    command: celery -A worker.app worker --loglevel=info --concurrency=4

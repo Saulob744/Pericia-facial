@@ -6,3 +6,12 @@ __pycache__/
 *.pyd
 *.dll
 venv/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.svg
+
+# Se as imagens estiverem em uma pasta específica, você pode ignorar a pasta inteira:
+data/
