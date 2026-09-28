@@ -17,7 +17,7 @@ app = Celery(
 )
 
 motor_arcface = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
-motor_arcface.prepare(ctx_id=0, det_size=(640, 640), det_thresh=0.10)
+motor_arcface.prepare(ctx_id=0, det_size=(640, 640), det_thresh=0.35)
 
 yolo_model = YOLO("yolov8n-face.pt")
 
@@ -81,7 +81,7 @@ def extrair_faces_tarefa(self, tarefa_id, id_extracao, caminho_fisico, pasta_des
         nome_arquivo_original = os.path.basename(caminho_fisico)
 
         combined = []
-        limiar_corte = min(float(confianca_minima), 0.25)
+        limiar_corte = min(float(confianca_minima), 0.35)
 
         faces_arc = motor_arcface.get(img_bgr)
         for idx, face in enumerate(faces_arc):
@@ -95,7 +95,7 @@ def extrair_faces_tarefa(self, tarefa_id, id_extracao, caminho_fisico, pasta_des
                 })
 
         if not combined:
-            results = yolo_model(img_bgr, verbose=False, conf=0.20)
+            results = yolo_model(img_bgr, verbose=False, conf=0.40) 
             for r in results:
                 for det in r.boxes:
                     x1_y, y1_y, x2_y, y2_y = map(int, det.xyxy[0].tolist())
@@ -114,7 +114,8 @@ def extrair_faces_tarefa(self, tarefa_id, id_extracao, caminho_fisico, pasta_des
                         extra = motor_arcface.get(crop_pessoa)
                         if extra:
                             for face_ex in extra:
-                                fx1, fy1, fx2, fy2 = face_ex.bbox.astype(int)
+                                if face_ex.det_score >= 0.35: 
+                                    fx1, fy1, fx2, fy2 = face_ex.bbox.astype(int)
                                 abs_x1, abs_y1 = ax1 + max(0, fx1), ay1 + max(0, fy1)
                                 abs_x2, abs_y2 = ax1 + max(0, fx2), ay1 + max(0, fy2)
                                 
@@ -139,7 +140,7 @@ def extrair_faces_tarefa(self, tarefa_id, id_extracao, caminho_fisico, pasta_des
                 for img_m, foi_espelhada in variacoes_m:
                     faces_m = motor_arcface.get(img_m)
                     for face_m in faces_m:
-                        if face_m.det_score >= 0.05:
+                        if face_m.det_score >= 0.35:
                             bbox = face_m.bbox.astype(int)
                             
                             if foi_espelhada:
@@ -161,46 +162,6 @@ def extrair_faces_tarefa(self, tarefa_id, id_extracao, caminho_fisico, pasta_des
                             })
                     if combined:
                         break
-            except Exception:
-                pass
-
-        if not combined:
-            try:
-                img_yuv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2YUV)
-                img_yuv[:,:,0] = cv2.equalizeHist(img_yuv[:,:,0])
-                img_clara = cv2.cvtColor(img_yuv, cv2.COLOR_YUV2BGR)
-                
-                alt_orig, larg_orig = img_clara.shape[:2]
-                img_zoom = cv2.resize(img_clara, (larg_orig * 2, alt_orig * 2), interpolation=cv2.INTER_CUBIC)
-                
-                rotacoes = [
-                    (img_zoom, 0),
-                    (cv2.rotate(img_zoom, cv2.ROTATE_90_CLOCKWISE), 90),
-                    (cv2.rotate(img_zoom, cv2.ROTATE_90_COUNTERCLOCKWISE), 270)
-                ]
-                
-                for img_rot, angulo in rotacoes:
-                    faces_resgate = motor_arcface.get(img_rot)
-                    if faces_resgate:
-                        for face_res in faces_resgate:
-                            if face_res.det_score >= 0.10:
-                                bbox = face_res.bbox.astype(int)
-                                bx1, by1, bx2, by2 = bbox[0] // 2, bbox[1] // 2, bbox[2] // 2, bbox[3] // 2
-                                
-                                if angulo == 90:
-                                    x1, y1, x2, y2 = by1, larg_orig - bx2, by2, larg_orig - bx1
-                                elif angulo == 270:
-                                    x1, y1, x2, y2 = alt_orig - by2, bx1, alt_orig - by1, bx2
-                                else:
-                                    x1, y1, x2, y2 = bx1, by1, bx2, by2
-                                    
-                                combined.append({
-                                    "bbox": np.array([max(0, x1), max(0, y1), max(0, x2), max(0, y2)]),
-                                    "embedding": face_res.embedding.astype(np.float32),
-                                    "source": f"resgate_optico_rot_{angulo}"
-                                })
-                        if combined:
-                            break
             except Exception:
                 pass
 

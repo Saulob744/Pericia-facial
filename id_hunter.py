@@ -389,7 +389,7 @@ def carregar_painel():
     
     confianca_minima = 0.35
     tolerancia_match = 0.45
-    tamanho_min_face = 50
+    tamanho_min_face = 60
     
     st.sidebar.info(f"""
     **Parâmetros travados pelo sistema:**
