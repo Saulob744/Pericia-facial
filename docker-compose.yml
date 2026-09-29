@@ -1,0 +1,58 @@
+version: "3.8"
+
+services:
+  db:
+    image: ankane/pgvector:latest
+    container_name: pericia_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - ./data/postgres_data:/var/lib/postgresql/data
+
+  broker:
+    image: redis:alpine
+    container_name: pericia_redis
+    restart: always
+
+  web:
+    build: .
+    container_name: pericia_web
+    restart: always
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+      - ./data:/app/data
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_HOST=db
+      - REDIS_URL=${REDIS_URL}
+      - PASTA_ORIGEM=${PASTA_ORIGEM}
+      - PASTA_DESTINO=${PASTA_DESTINO}
+    depends_on:
+      - db
+      - broker
+    command: streamlit run id_hunter.py --server.address 0.0.0.0
+
+  worker:
+    build: .
+    container_name: pericia_worker
+    restart: always
+    volumes:
+      - .:/app
+      - ./data:/app/data
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_HOST=db
+      - REDIS_URL=${REDIS_URL}
+    depends_on:
+      - db
+      - broker
+    command: celery -A worker.app worker --loglevel=info --concurrency=4

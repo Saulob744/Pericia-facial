@@ -1,0 +1,26 @@
+clean/
+__pycache__/
+*.pyc
+.env
+.vscode/
+*.pyd
+*.dll
+venv/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.svg
+clean/
+venv/
+__pycache__/
+data/
+postgres_data/
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.pt
+# Se as imagens estiverem em uma pasta específica, você pode ignorar a pasta inteira:
+data/
