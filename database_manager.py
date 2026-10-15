@@ -8,127 +8,145 @@ DB_CONFIG = {
     "dbname": os.getenv("POSTGRES_DB", "idhunter_db"),
     "user": os.getenv("POSTGRES_USER", "perito"),
     "password": os.getenv("POSTGRES_PASSWORD", "senha_segura_123"),
-    "host": os.getenv("DB_HOST", "127.0.0.1"),
-    "port": os.getenv("DB_PORT", "5454")
+    "host": os.getenv("DB_HOST", "db"),
+    "port": os.getenv("DB_PORT", "5432")
 }
 
 def conectar_banco():
     conn = psycopg2.connect(**DB_CONFIG)
+    with conn.cursor() as cursor:
+        cursor.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+    conn.commit()
     register_vector(conn)
+    with conn.cursor() as cursor:
+        cursor.execute("SET hnsw.ef_search = 100;")
+        
     return conn
 
 def inicializar_banco():
     conn = conectar_banco()
     cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS individuos (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            embedding VECTOR(512),
-            data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS ocorrencias (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            individuo_id UUID REFERENCES individuos(id),
-            id_extracao VARCHAR(50), 
-            hash_sha256 VARCHAR(64) UNIQUE,
-            caminho_arquivo TEXT,
-            caminho_crop TEXT,
-            data_ocorrencia TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS fila_processamento (
-            id SERIAL PRIMARY KEY,
-            id_extracao VARCHAR(50),
-            caminho_arquivo TEXT UNIQUE,
-            status VARCHAR(20) DEFAULT 'PENDENTE',
-            data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_individuos_embedding_hnsw 
-        ON individuos 
-        USING hnsw (embedding vector_cosine_ops) 
-        WITH (m = 16, ef_construction = 64);
-    """)
-    conn.commit()
-    cursor.close()
-    conn.close()
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS individuos (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                embedding VECTOR(512),
+                data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ocorrencias (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                individuo_id UUID REFERENCES individuos(id),
+                id_extracao VARCHAR(50), 
+                hash_sha256 VARCHAR(64) UNIQUE,
+                caminho_arquivo TEXT,
+                caminho_crop TEXT,
+                data_ocorrencia TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS fila_processamento (
+                id SERIAL PRIMARY KEY,
+                id_extracao VARCHAR(50),
+                caminho_arquivo TEXT UNIQUE,
+                status VARCHAR(20) DEFAULT 'PENDENTE',
+                data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        # Índice HNSW otimizado para milhões de vetores de 512 dimensões
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_individuos_embedding_hnsw 
+            ON individuos 
+            USING hnsw (embedding vector_cosine_ops) 
+            WITH (m = 24, ef_construction = 128);
+        """)
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
 
 def resetar_banco_dados():
     conn = conectar_banco()
     cursor = conn.cursor()
-    cursor.execute("TRUNCATE fila_processamento, ocorrencias, individuos RESTART IDENTITY CASCADE;")
-    conn.commit()
-    cursor.close()
-    conn.close()
-    return True
+    try:
+        cursor.execute("TRUNCATE fila_processamento, ocorrencias, individuos RESTART IDENTITY CASCADE;")
+        conn.commit()
+        return True
+    finally:
+        cursor.close()
+        conn.close()
 
 def buscar_similar(vetor_novo, limite_distancia=0.38):
     conn = conectar_banco()
     cursor = conn.cursor()
-    vetor_arr = np.array(vetor_novo, dtype=np.float32)
-    norma = np.linalg.norm(vetor_arr)
-    if norma > 0:
-        vetor_arr = vetor_arr / norma
-    sql = """
-        SELECT id, (embedding <=> %s::vector) AS distancia 
-        FROM individuos 
-        WHERE (embedding <=> %s::vector) < %s
-        ORDER BY distancia ASC
-        LIMIT 1;
-    """
-    cursor.execute(sql, (vetor_arr, vetor_arr, limite_distancia))
-    resultado = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    return resultado
+    try:
+        vetor_arr = np.array(vetor_novo, dtype=np.float32)
+        norma = np.linalg.norm(vetor_arr)
+        if norma > 0:
+            vetor_arr = vetor_arr / norma
+        sql = """
+            SELECT id, (embedding <=> %s::vector) AS distancia 
+            FROM individuos 
+            WHERE (embedding <=> %s::vector) < %s
+            ORDER BY distancia ASC
+            LIMIT 1;
+        """
+        cursor.execute(sql, (vetor_arr, vetor_arr, limite_distancia))
+        return cursor.fetchone()
+    finally:
+        cursor.close()
+        conn.close()
 
 def buscar_historico_completo_por_vetor(vetor_novo, limite_distancia=0.50):
     conn = conectar_banco()
     cursor = conn.cursor()
-    vetor_arr = np.array(vetor_novo, dtype=np.float32)
-    norma = np.linalg.norm(vetor_arr)
-    if norma > 0:
-        vetor_arr = vetor_arr / norma
-    sql_ind = """
-        SELECT id, (embedding <=> %s::vector) AS distancia 
-        FROM individuos 
-        WHERE (embedding <=> %s::vector) < %s
-        ORDER BY distancia ASC;
-    """
-    cursor.execute(sql_ind, (vetor_arr, vetor_arr, limite_distancia))
-    individuos_encontrados = cursor.fetchall()
-    resultados = []
-    for ind_id, dist in individuos_encontrados:
-        sql_ocorrencias = """
-            SELECT id_extracao, caminho_arquivo, caminho_crop, data_ocorrencia
-            FROM ocorrencias
-            WHERE individuo_id = %s
-            ORDER BY data_ocorrencia DESC;
+    try:
+        vetor_arr = np.array(vetor_novo, dtype=np.float32)
+        norma = np.linalg.norm(vetor_arr)
+        if norma > 0:
+            vetor_arr = vetor_arr / norma
+        sql_ind = """
+            SELECT id, (embedding <=> %s::vector) AS distancia 
+            FROM individuos 
+            WHERE (embedding <=> %s::vector) < %s
+            ORDER BY distancia ASC;
         """
-        cursor.execute(sql_ocorrencias, (ind_id,))
-        ocorrencias = cursor.fetchall()
-        resultados.append({
-            "individuo_id": ind_id,
-            "distancia": float(dist),
-            "ocorrencias": [
-                {
-                    "lote": oc[0],
-                    "caminho_arquivo": oc[1],
-                    "caminho_crop": oc[2],
-                    "data_ocorrencia": oc[3]
-                }
-                for oc in ocorrencias
-            ]
-        })
-    cursor.close()
-    conn.close()
-    return resultados
+        cursor.execute(sql_ind, (vetor_arr, vetor_arr, limite_distancia))
+        individuos_encontrados = cursor.fetchall()
+        resultados = []
+        for ind_id, dist in individuos_encontrados:
+            sql_ocorrencias = """
+                SELECT id_extracao, caminho_arquivo, caminho_crop, data_ocorrencia
+                FROM ocorrencias
+                WHERE individuo_id = %s
+                ORDER BY data_ocorrencia DESC;
+            """
+            cursor.execute(sql_ocorrencias, (ind_id,))
+            ocorrencias = cursor.fetchall()
+            resultados.append({
+                "individuo_id": ind_id,
+                "distancia": float(dist),
+                "ocorrencias": [
+                    {
+                        "lote": oc[0],
+                        "caminho_arquivo": oc[1],
+                        "caminho_crop": oc[2],
+                        "data_ocorrencia": oc[3]
+                    }
+                    for oc in ocorrencias
+                ]
+            })
+        return resultados
+    finally:
+        cursor.close()
+        conn.close()
 
 def registrar_face(vetor_512d, hash_foto, id_extracao, caminho_original, caminho_crop, limite_distancia=0.38):
+    """
+    Registra a face no banco vetorial. Se encontrar similaridade dentro do limite,
+    vincula a ocorrência ao indivíduo existente (REINCIDENTE); caso contrário, cria novo indivíduo.
+    """
     conn = conectar_banco()
     cursor = conn.cursor()
     historico_lotes = []
@@ -140,13 +158,7 @@ def registrar_face(vetor_512d, hash_foto, id_extracao, caminho_original, caminho
         match = buscar_similar(vetor_arr, limite_distancia=limite_distancia)
         if match:
             individuo_id = match[0]
-            distancia = match[1]
-            
-            if distancia < 0.15:
-                return "DUPLICADO", None, []
-
             status = "REINCIDENTE"
-
             cursor.execute("SELECT DISTINCT id_extracao FROM ocorrencias WHERE individuo_id = %s;", (individuo_id,))
             historico_lotes = [linha[0] for linha in cursor.fetchall()]
         else:
@@ -199,29 +211,29 @@ def obter_todas_tarefas_pendentes():
         cursor.close()
         conn.close()
 
-def pegar_tarefa_pendente():
+def pegar_tarefas_em_lote(limite=50):
     conn = conectar_banco()
     cursor = conn.cursor()
     try:
         sql = """
             UPDATE fila_processamento
             SET status = 'PROCESSANDO'
-            WHERE id = (
+            WHERE id IN (
                 SELECT id FROM fila_processamento 
                 WHERE status = 'PENDENTE' 
                 ORDER BY id ASC
-                LIMIT 1 
+                LIMIT %s 
                 FOR UPDATE SKIP LOCKED
             )
             RETURNING id, id_extracao, caminho_arquivo;
         """
-        cursor.execute(sql)
-        tarefa = cursor.fetchone()
+        cursor.execute(sql, (limite,))
+        tarefas = cursor.fetchall()
         conn.commit()
-        return tarefa
+        return tarefas
     except Exception:
         conn.rollback()
-        return None
+        return []
     finally:
         cursor.close()
         conn.close()
@@ -316,7 +328,6 @@ def atualizar_caminho_crop_ocorrencia(hash_foto, caminho_real_crop):
     finally:
         cursor.close()
         conn.close()
-
 
 if __name__ == "__main__":
     inicializar_banco()

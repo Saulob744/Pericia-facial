@@ -21,6 +21,6 @@ postgres_data/
 *.jpeg
 *.png
 *.mp4
-*.pt
-# Se as imagens estiverem em uma pasta específica, você pode ignorar a pasta inteira:
+# Permitir imagens da documentacao tecnica
+!DOCS/assets/*
 data/

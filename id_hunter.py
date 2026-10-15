@@ -1,23 +1,60 @@
 import base64
 import os
+import shutil
 import warnings
 import cv2
 import numpy as np
 import streamlit as st
+import json
+from datetime import datetime
+import stat
+
+METRICAS_FILE = "/app/data/metricas_teste.json"
+
+def salvar_inicio_teste():
+    dados = {
+        "inicio_iso": datetime.now().isoformat(),
+        "status": "EM_ANDAMENTO"
+    }
+    try:
+        os.makedirs(os.path.dirname(METRICAS_FILE), exist_ok=True)
+        with open(METRICAS_FILE, "w") as f:
+            json.dump(dados, f)
+    except Exception:
+        pass
+
+def obter_inicio_teste():
+    if os.path.exists(METRICAS_FILE):
+        try:
+            with open(METRICAS_FILE, "r") as f:
+                dados = json.load(f)
+                return datetime.fromisoformat(dados["inicio_iso"])
+        except Exception:
+            return None
+    return None
+
+def limpar_metricas_teste():
+    if os.path.exists(METRICAS_FILE):
+        try:
+            os.remove(METRICAS_FILE)
+        except Exception:
+            pass
 
 from database_manager import (
     buscar_historico_completo_por_vetor,
     obter_estatisticas_sistema,
     obter_reincidentes_banco,
-    obter_todas_tarefas_pendentes,
     resetar_banco_dados,
+    pegar_tarefas_em_lote,
+    cancelar_tarefas_pendentes,
 )
-from worker import extrair_faces_tarefa
+from worker import processar_lote_faces_tarefa, app as celery_app
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 
 st.set_page_config(layout="wide", page_title="PERÍCIA FACE | Polícia Científica", page_icon="🛡️")
 
+# Estilização CSS do Painel
 st.markdown("""
     <style>
     .main { background-color: #0b0f19; color: #f8fafc; }
@@ -55,6 +92,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+
 @st.cache_resource
 def carregar_modelo_arcface(confianca_atual):
     try:
@@ -65,32 +103,62 @@ def carregar_modelo_arcface(confianca_atual):
     except Exception:
         return None
 
+
 def obter_base64(caminho):
     if not os.path.exists(caminho):
         return ""
     with open(caminho, "rb") as img_file:
         return base64.b64encode(img_file.read()).decode()
 
+
 def formatar_caminho_seguro(caminho):
     if not caminho:
         return "Desconhecido"
     c = caminho.replace('\\', '/')
     parts = c.split('/')
-    parts_lower = [p.lower() for p in parts]
-    if 'downloads' in parts_lower:
-        idx = parts_lower.index('downloads')
-        return ".../" + "/".join(parts[idx:])
     return ".../" + "/".join(parts[-3:]) if len(parts) > 3 else c
+
+
+def remove_readonly(func, path, excinfo):
+    """Garante a remoção de arquivos somente-leitura ou protegidos pelo Docker."""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+def limpar_arquivos_gerados(pasta_destino):
+    if not os.path.exists(pasta_destino):
+        return True, "Diretório de destino está vazio ou não existe."
+
+    erros = 0
+    removidos = 0
+
+    for item in os.listdir(pasta_destino):
+        item_path = os.path.join(pasta_destino, item)
+        try:
+            if os.path.isfile(item_path) or os.path.islink(item_path):
+                os.chmod(item_path, stat.S_IWRITE)
+                os.unlink(item_path)
+                removidos += 1
+            elif os.path.isdir(item_path):
+                shutil.rmtree(item_path, onerror=remove_readonly)
+                removidos += 1
+        except Exception:
+            erros += 1
+
+    if erros > 0:
+        return False, f"Removidos {removidos} itens, mas {erros} falharam por permissão do Docker."
+    
+    return True, f"Sucesso! {removidos} pasta(s)/arquivo(s) de crops foram limpos do disco."
 
 @st.fragment(run_every="3s")
 def monitorar_progresso_fragment():
     stats = obter_estatisticas_sistema()
     fila_stats = stats.get("fila", {})
     bio_stats = stats.get("biometria", {})
-    total_fila = sum(fila_stats.values())
+    pendentes_reais = fila_stats.get("PENDENTE", 0) + fila_stats.get("PROCESSANDO", 0)
     concluidas = fila_stats.get("CONCLUIDO", 0) + fila_stats.get("SEM_ROSTO", 0) + fila_stats.get("FALHA", 0)
-    progresso_pct = (concluidas / total_fila) if total_fila > 0 else 0.0
-    pendentes_reais = total_fila - concluidas
+    total_valido = pendentes_reais + concluidas
+    
+    progresso_pct = (concluidas / total_valido) if total_valido > 0 else 0.0
 
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
@@ -106,62 +174,127 @@ def monitorar_progresso_fragment():
 
     st.write("")
     st.progress(progresso_pct, text=f"Progresso de Processamento: {progresso_pct*100:.1f}% ({concluidas}/{total_fila})")
-    
+
+    inicio_dt = obter_inicio_teste()
+    if inicio_dt and concluidas > 0:
+        decorrido_seg = max(1, (datetime.now() - inicio_dt).total_seconds())
+        v_fps = concluidas / decorrido_seg
+        v_fpm = v_fps * 60
+        
+        m_dec, s_dec = divmod(int(decorrido_seg), 60)
+        h_dec, m_dec = divmod(m_dec, 60)
+        str_decorrido = f"{h_dec:02d}h {m_dec:02d}m {s_dec:02d}s"
+        
+        if pendentes_reais > 0 and v_fps > 0:
+            eta_seg = int(pendentes_reais / v_fps)
+            m_eta, s_eta = divmod(eta_seg, 60)
+            h_eta, m_eta = divmod(m_eta, 60)
+            str_eta = f"{h_eta:02d}h {m_eta:02d}m {s_eta:02d}s"
+        else:
+            str_eta = "Concluído" if pendentes_reais == 0 else "Calculando..."
+
+        st.markdown(f"""
+        <div style="background-color: #1e293b; padding: 15px 20px; border-radius: 10px; border: 1px solid #334155; margin-top: 15px;">
+            <h5 style="margin: 0 0 10px 0; color: #38bdf8;">📊 Relatório de Performance em Tempo Real</h5>
+            <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; font-size: 0.95rem;">
+                <div><b>🕒 Horário de Início:</b> <span style="color: #cbd5e1;">{inicio_dt.strftime('%H:%M:%S (%d/%m)')}</span></div>
+                <div><b>⏱️ Tempo Decorrido:</b> <span style="color: #fbbf24;">{str_decorrido}</span></div>
+                <div><b>⚡ Velocidade Média:</b> <span style="color: #34d399;">{v_fps:.2f} fotos/s</span> ({v_fpm:.1f} fotos/min)</div>
+                <div><b>⏳ Previsão de Término (ETA):</b> <span style="color: #f87171;">{str_eta}</span></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
     if pendentes_reais <= 0 and total_fila > 0:
         st.success("Todas as tarefas da fila foram concluídas!")
 
+
 def tab_processamento(pasta_origem, pasta_destino, tolerancia_match, tamanho_min_face, confianca_minima):
     st.subheader("Controle de Fila e Processamento")
-    col_p1, col_p2, _ = st.columns([2, 2, 3])
+    col_p1, col_p2, _ = st.columns([3, 3, 1])
+    
     with col_p1: 
-        input_origem = st.text_input("Diretório de Origem:", placeholder="[Caminho Padrão Oculto por Segurança] - Digite para alterar", value="")
+        input_origem = st.text_input("Diretório de Origem (Entradas):", value=pasta_origem)
         p_origem_real = input_origem.strip() if input_origem.strip() else pasta_origem
         
     with col_p2: 
-        input_destino = st.text_input("Diretório de Destino:", placeholder="[Caminho Padrão Oculto por Segurança] - Digite para alterar", value="")
+        input_destino = st.text_input("Diretório de Destino (Crops/Resultados):", value=pasta_destino)
         p_destino_real = input_destino.strip() if input_destino.strip() else pasta_destino
 
     st.write("")
-    col_btn1, col_btn2, col_btn3, col_btn4, _ = st.columns([1.5, 1.5, 1.5, 1.5, 4])
+    col_btn1, col_btn2, col_btn3, col_btn4, col_btn5 = st.columns([1.5, 1.5, 1.5, 1.8, 1.8])
 
     with col_btn1:
-        if st.button("Alimentar Fila", use_container_width=True):
+        if st.button("📥 Alimentar Fila", use_container_width=True):
             if not os.path.exists(p_origem_real):
-                st.error("Diretório não localizado.")
+                st.error(f"Diretório não localizado: {p_origem_real}")
             else:
-                with st.spinner("Indexando..."):
+                with st.spinner("Indexando arquivos..."):
                     from maestro_scanner import mapear_lotes_de_extracao
                     total = mapear_lotes_de_extracao(p_origem_real)
-                st.success(f"{total} registros inseridos.")
+                st.success(f"{total} registros inseridos na fila.")
 
     with col_btn2:
-        if st.button("▶️ Iniciar", type="primary", use_container_width=True):
-            with st.spinner("Despachando..."):
-                tarefas = obter_todas_tarefas_pendentes()
-                for t in tarefas:
-                    tarefa_id, id_extracao, caminho_relativo = t
-                    caminho_fisico = os.path.join(p_origem_real, caminho_relativo)
-                    extrair_faces_tarefa.delay(tarefa_id, id_extracao, caminho_fisico, p_destino_real, tolerancia_match, tamanho_min_face, confianca_minima)
-            st.success(f"{len(tarefas)} tarefas enviadas!")
+            if st.button("▶️ Iniciar Lotes", type="primary", use_container_width=True):
+                salvar_inicio_teste()
+                if not os.path.exists(p_origem_real):
+                    st.error(f"Diretório de origem inválido: {p_origem_real}")
+                else:
+                    with st.spinner("Despachando lotes vetorizados para os workers..."):
+                        total_enviadas = 0
+                        tamanho_lote = 32
+
+                        while True:
+                            tarefas = pegar_tarefas_em_lote(tamanho_lote)
+                            if not tarefas:
+                                break
+                            
+                            lote_envio = []
+                            for t in tarefas:
+                                tarefa_id, id_extracao, caminho_relativo = t
+                                caminho_fisico = os.path.join(p_origem_real, caminho_relativo) if not os.path.isabs(caminho_relativo) else caminho_relativo
+                                
+                                lote_envio.append({
+                                    "tarefa_id": tarefa_id,
+                                    "id_extracao": id_extracao,
+                                    "caminho_fisico": caminho_fisico,
+                                    "pasta_destino": p_destino_real,
+                                    "tolerancia_match": tolerancia_match,
+                                    "tamanho_min_face": tamanho_min_face,
+                                    "confianca_minima": confianca_minima
+                                })
+                            
+                            processar_lote_faces_tarefa.delay(lote_envio)
+                            total_enviadas += len(lote_envio)
+                            
+                    st.success(f"Sucesso! {total_enviadas} tarefas foram despachadas em lotes de {tamanho_lote}.")
 
     with col_btn3:
         if st.button("🛑 Parar", use_container_width=True):
-            with st.spinner("Parando..."):
-                from worker import app 
-                app.control.purge()
-                from database_manager import cancelar_tarefas_pendentes
+            with st.spinner("Expurgando fila do Celery e cancelando tarefas..."):
+                celery_app.control.purge()
                 cancelar_tarefas_pendentes()
-            st.warning("Interrompido!")
+                limpar_metricas_teste()
+            st.warning("Processamento interrompido!")
+            st.rerun()
 
     with col_btn4:
         if st.button("🔄 Resetar Banco", use_container_width=True):
+            limpar_metricas_teste() 
             if resetar_banco_dados():
-                st.success("Banco resetado com sucesso.")
-            else:
-                st.error("Falha ao resetar banco.")
+                st.success("Banco de dados resetado com sucesso.")
 
-    st.divider()
-    monitorar_progresso_fragment()
+    with col_btn5:
+        if st.button("🗑️ Limpar Crops", use_container_width=True):
+            sucesso, mensagem = limpar_arquivos_gerados(p_destino_real)
+            monitorar_progresso_fragment()
+            if sucesso:
+                st.success(mensagem)
+                st.rerun()
+            else:
+                st.warning(mensagem)
+    
+
 
 @st.fragment(run_every="5s")
 def renderizar_auditoria_fragment(termo_busca):
@@ -207,6 +340,7 @@ def renderizar_auditoria_fragment(termo_busca):
                 key="btn_carregar_mais_auditoria"
             )
 
+
 def tab_auditoria():
     st.subheader("Auditoria de Reincidentes")
     
@@ -218,6 +352,7 @@ def tab_auditoria():
         termo_busca = st.text_input("Filtrar por ID ou Lote de Reincidente:", value="", key="busca_auditoria").strip().lower()
 
     renderizar_auditoria_fragment(termo_busca)
+
 
 def tab_busca(confianca_minima, tolerancia_match, tamanho_min_face, pasta_destino):
     st.subheader("Busca Biométrica Avançada")
@@ -300,6 +435,7 @@ def tab_busca(confianca_minima, tolerancia_match, tamanho_min_face, pasta_destin
             elif not executar:
                 st.info("Clique em 'Executar Varredura' para processar a imagem e buscar no banco de dados.")
 
+
 @st.fragment(run_every="5s")
 def renderizar_galeria_descartes(pasta, chave_sessao, key_prefix):
     extensoes = ('.png', '.jpg', '.jpeg', '.bmp', '.webp', '.heic', '.heif')
@@ -340,6 +476,7 @@ def renderizar_galeria_descartes(pasta, chave_sessao, key_prefix):
     else:
         st.info("A pasta de descartes ainda não foi criada.")
 
+
 def tab_curadoria(pasta_destino):
     st.subheader("Curadoria e Análise de Descartes")
     
@@ -354,6 +491,7 @@ def tab_curadoria(pasta_destino):
         p_conf_alt = os.path.join(pasta_destino, "_descartados_confianca")
         p_alvo = p_conf if os.path.exists(p_conf) else p_conf_alt
         renderizar_galeria_descartes(p_alvo, "limite_descartes_conf", "descartes_conf")
+
 
 def carregar_painel():
     col_header, col_logo = st.columns([7.5, 2.5])
@@ -387,7 +525,7 @@ def carregar_painel():
 
     st.sidebar.markdown("### ⚙️ Padrões Forenses")
     
-    confianca_minima = 0.35
+    confianca_minima = 0.65
     tolerancia_match = 0.45
     tamanho_min_face = 60
     
@@ -398,8 +536,9 @@ def carregar_painel():
     - Rosto Mínimo: **{tamanho_min_face}px**
     """)
     
-    pasta_origem = os.getenv("PASTA_ORIGEM", r"C:\Users\saulo.borges\Downloads\facial_teste\entradas_celular")
-    pasta_destino = os.getenv("PASTA_DESTINO", r"C:\Users\saulo.borges\Downloads\facial_teste\armazenamento_crops")
+    # Caminhos padrão para ambiente Docker/Linux (substituindo padrões hardcoded de Windows)
+    pasta_origem = os.getenv("PASTA_ORIGEM", "/app/data/entradas_celular")
+    pasta_destino = os.getenv("PASTA_DESTINO", "/app/data/armazenamento_crops")
 
     a1, a2, a3, a4 = st.tabs(["Processamento de Fila", "Auditoria de Reincidência", "Busca Biométrica", "Curadoria de Descartes"])
     
@@ -411,6 +550,7 @@ def carregar_painel():
         tab_busca(confianca_minima, tolerancia_match, tamanho_min_face, pasta_destino)
     with a4:
         tab_curadoria(pasta_destino)
+
 
 if __name__ == "__main__":
     carregar_painel()

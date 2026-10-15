@@ -1,0 +1,11 @@
+clean/
+venv/
+__pycache__/
+data/
+postgres_data/
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.pt
+.git/

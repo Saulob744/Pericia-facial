@@ -6,9 +6,17 @@ services:
     container_name: pericia_db
     restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:-perito}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-senha_segura_123}
+      POSTGRES_DB: ${POSTGRES_DB:-idhunter_db}
+    command: >
+      postgres
+      -c shared_buffers=2GB
+      -c work_mem=64MB
+      -c maintenance_work_mem=512MB
+      -c max_parallel_workers_per_gather=4
+    ports:
+      - "5454:5432"
     volumes:
       - ./data/postgres_data:/var/lib/postgresql/data
 
@@ -16,43 +24,67 @@ services:
     image: redis:alpine
     container_name: pericia_redis
     restart: always
+    ports:
+      - "6379:6379"
 
   web:
-    build: .
+    build:
+      context: .
+      args:
+        PROXY_USER: ${PROXY_USER}
+        PROXY_PASS: ${PROXY_PASS}
+        PROXY_IP: ${PROXY_IP}
     container_name: pericia_web
     restart: always
+    # Executa o database_manager.py para criar as tabelas e depois inicia o Streamlit
+    command: sh -c "python database_manager.py && streamlit run id_hunter.py --server.port=8501 --server.address=0.0.0.0"
     ports:
       - "8501:8501"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-perito}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-senha_segura_123}
+      - POSTGRES_DB=${POSTGRES_DB:-idhunter_db}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - REDIS_URL=${REDIS_URL:-redis://broker:6379/0}
+      - PASTA_ORIGEM=${PASTA_ORIGEM:-/app/data/entradas_celular}
+      - PASTA_DESTINO=${PASTA_DESTINO:-/app/data/armazenamento_crops}
     volumes:
       - .:/app
       - ./data:/app/data
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
-      - POSTGRES_HOST=db
-      - REDIS_URL=${REDIS_URL}
-      - PASTA_ORIGEM=${PASTA_ORIGEM}
-      - PASTA_DESTINO=${PASTA_DESTINO}
+      - ./data/insightface:/root/.insightface
     depends_on:
       - db
       - broker
-    command: streamlit run id_hunter.py --server.address 0.0.0.0
 
   worker:
-    build: .
+    build:
+      context: .
+      args:
+        PROXY_USER: ${PROXY_USER}
+        PROXY_PASS: ${PROXY_PASS}
+        PROXY_IP: ${PROXY_IP}
     container_name: pericia_worker
     restart: always
+    command: celery -A worker.app worker --loglevel=info --concurrency=4 -P threads
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-perito}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-senha_segura_123}
+      - POSTGRES_DB=${POSTGRES_DB:-idhunter_db}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - REDIS_URL=${REDIS_URL:-redis://broker:6379/0}
+      - PASTA_ORIGEM=${PASTA_ORIGEM:-/app/data/entradas_celular}
+      - PASTA_DESTINO=${PASTA_DESTINO:-/app/data/armazenamento_crops}
+      - OMP_NUM_THREADS=2
+      - OPENBLAS_NUM_THREADS=2
+      - MKL_NUM_THREADS=2
+      - VECLIB_MAXIMUM_THREADS=2
+      - NUMEXPR_NUM_THREADS=2
     volumes:
       - .:/app
       - ./data:/app/data
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
-      - POSTGRES_HOST=db
-      - REDIS_URL=${REDIS_URL}
+      - ./data/insightface:/root/.insightface
     depends_on:
       - db
       - broker
-    command: celery -A worker.app worker --loglevel=info --concurrency=4
